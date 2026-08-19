@@ -8,13 +8,8 @@
    [com.rpl.agent-o-rama :as aor]
    [com.rpl.agent-o-rama.impl.analytics :as ana]
    [com.rpl.agent-o-rama.impl.types :as aor-types]
-   [com.rpl.agent-o-rama.langchain4j :as lc4j])
-  (:import
-   [dev.langchain4j.data.message
-    SystemMessage
-    UserMessage]
-   [dev.langchain4j.model.openai
-    OpenAiChatModel]))
+   [com.rpl.agent-o-rama.model :as model]
+   [com.rpl.agent-o-rama.model.openai :as openai]))
 
 (defn rules-test-agent
   "Main agent implementation that generates runs based on mode.
@@ -58,14 +53,13 @@
        {"status" "success" "latency" "fast" "result" input})
 
       :chat
-      (let [model    (aor/get-agent-object agent-node "openai-model")
-            messages [(SystemMessage. "You are a helpful assistant.")
-                      (UserMessage. (str input))]
-            response (lc4j/chat model (lc4j/chat-request messages {}))
-            text     (.text (.aiMessage response))]
+      (let [m        (aor/get-agent-object agent-node "openai-model")
+            messages [(model/system "You are a helpful assistant.")
+                      (model/user (str input))]
+            response (model/chat m {:messages messages})]
         (aor/result!
          agent-node
-         {"status" "success" "mode" "chat" "response" text}))
+         {"status" "success" "mode" "chat" "response" (:text response)}))
 
       :input-match
       (aor/result!
@@ -280,12 +274,9 @@
    topology
    "openai-model"
    (fn [_setup]
-     (-> (OpenAiChatModel/builder)
-         (.apiKey (or (System/getenv "OPENAI_API_KEY") "fake-key"))
-         (.modelName "gpt-4o-mini")
-         (.temperature 0.7)
-         (.maxTokens (int 50))
-         .build)))
+     (openai/responses-model
+      {:api-key (or (System/getenv "OPENAI_API_KEY") "fake-key")
+       :model   "gpt-4o-mini"})))
 
   ;; Declare test action builders
   (aor/declare-action-builder

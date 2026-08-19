@@ -1,25 +1,25 @@
-(ns com.rpl.agent.basic.streaming-langchain4j-agent-test
+(ns com.rpl.agent.basic.streaming-openai-agent-test
   (:require
    [clojure.test :refer [deftest testing is]]
    [com.rpl.agent-o-rama :as aor]
    [com.rpl.rama :as rama]
    [com.rpl.rama.test :as rtest]
-   [com.rpl.agent.basic.streaming-langchain4j-agent :refer [StreamingLangChain4jAgentModule]]))
+   [com.rpl.agent.basic.streaming-openai-agent :refer [StreamingOpenAIAgentModule]]))
 
-(deftest streaming-langchain4j-agent-test
-  ;; Test verifies that the StreamingLangChain4jAgentModule correctly
+(deftest streaming-openai-agent-test
+  ;; Test verifies that the StreamingOpenAIAgentModule correctly
   ;; handles streaming responses from OpenAI's API
   (System/gc)
-  (testing "StreamingLangChain4jAgent"
+  (testing "StreamingOpenAIAgent"
     (testing "with real OpenAI streaming model"
       (if (System/getenv "OPENAI_API_KEY")
         (with-open [ipc (rtest/create-ipc)]
-          (rtest/launch-module! ipc StreamingLangChain4jAgentModule {:tasks 1 :threads 1})
+          (rtest/launch-module! ipc StreamingOpenAIAgentModule {:tasks 1 :threads 1})
 
           (let [manager (aor/agent-manager ipc
                                            (rama/get-module-name
-                                            StreamingLangChain4jAgentModule))
-                agent   (aor/agent-client manager "StreamingLangChain4jAgent")]
+                                            StreamingOpenAIAgentModule))
+                agent   (aor/agent-client manager "StreamingOpenAIAgent")]
 
             (testing "receives streaming chunks and final result"
               (let [invoke (aor/agent-initiate agent "What is AI?")
@@ -65,4 +65,4 @@
                   (is (string? final-result))
                   (is (> (count final-result) 10)))))))
 
-        (println "Skipping StreamingLangChain4jAgent test - OPENAI_API_KEY not set")))))
+        (println "Skipping StreamingOpenAIAgent test - OPENAI_API_KEY not set")))))

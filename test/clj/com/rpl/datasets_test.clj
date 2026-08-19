@@ -26,8 +26,7 @@
     ValidationMessage]
    [com.rpl.agentorama
     AddDatasetExampleOptions]
-   [dev.langchain4j.data.message
-    UserMessage]))
+))
 
 
 (defrecord Person [name age])
@@ -1338,8 +1337,8 @@
        (binding [aor-types/OPERATION-SOURCE ai-source]
          (add-example-and-wait! manager
                                 ds-id5
-                                (UserMessage. "apple")
-                                {:reference-output (UserMessage. "grOUcho")}))
+                                {"text" "apple"}
+                                {:reference-output {"text" "grOUcho"}}))
 
 
        (bind {:keys [examples pagination-params]}
@@ -1410,8 +1409,8 @@
           nil
          ))
        (is (= (examples-cleaned examples)
-              [{:input  (UserMessage. "apple")
-                :reference-output (UserMessage. "grOUcho")
+              [{:input  {"text" "apple"}
+                :reference-output {"text" "grOUcho"}
                 :tags   #{}
                 :source ai-source}
               ]))

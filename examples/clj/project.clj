@@ -1,8 +1,5 @@
 (defproject com.rpl/agent-o-rama-examples "1.0.0-SNAPSHOT"
-  :dependencies [[com.rpl/agent-o-rama "0.10.0"]
-                 [dev.langchain4j/langchain4j-open-ai "1.18.0"]
-                 [dev.langchain4j/langchain4j-web-search-engine-tavily
-                  "1.18.0-beta28"]]
+  :dependencies [[com.rpl/agent-o-rama "0.10.0"]]
   :jvm-opts ["-Xss6m"
              "-Xms6g"
              "-Xmx6g"

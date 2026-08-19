@@ -11,11 +11,8 @@
    [com.rpl.agent.research-agent :as research-agent]
    [com.rpl.agent.e2e-test-agent :as e2e-test-agent]
    [com.rpl.agent.streaming-test-agent :as streaming-test-agent]
-   [com.rpl.agent.gantt-stress-agent :as gantt-stress-agent])
-  (:import
-   [dev.langchain4j.data.message
-    SystemMessage
-    UserMessage]))
+   [com.rpl.agent.gantt-stress-agent :as gantt-stress-agent]
+   [com.rpl.agent-o-rama.model :as model]))
 
 (defn start-repl
   [ipc & {:keys [port build-id] :or {port 1974 build-id :frontend}}]
@@ -181,15 +178,15 @@
    ipc
    (get-module-name com.rpl.agent.basic.basic-agent/BasicAgentModule))
 
-  (require 'com.rpl.agent.basic.langchain4j-agent)
+  (require 'com.rpl.agent.basic.openai-agent)
   (rtest/launch-module!
    ipc
-   com.rpl.agent.basic.langchain4j-agent/LangChain4jAgentModule
+   com.rpl.agent.basic.openai-agent/OpenAIAgentModule
    {:tasks 1 :threads 1})
 
   (rtest/destroy-module!
    ipc
-   (get-module-name com.rpl.agent.basic.langchain4j-agent/LangChain4jAgentModule))
+   (get-module-name com.rpl.agent.basic.openai-agent/OpenAIAgentModule))
 
   (require 'com.rpl.agent.basic.tools-agent)
   (rtest/launch-module!
@@ -223,11 +220,11 @@
         ^String user-input (read-line)
         result        (aor/agent-invoke
                        agent
-                       [(SystemMessage/from
+                       [(model/system
                          (format
                           "You are a helpful AI assistant. System time: %s"
                           (.toString (java.time.Instant/now))))
-                        (UserMessage. user-input)])]
+                        (model/user user-input)])]
     (println result))
 
 

@@ -23,13 +23,12 @@ Vector stores maintain high-dimensional embedding spaces with consistent dimensi
 - Access: Through `AgentNode` interface for embedding and search operations
 
 ## Relationships
-- Uses: [agent-objects], [agent-topology], [langchain4j-integration]
+- Uses: [agent-objects], [agent-topology]
 - Used by: [agent-node], [agent], [tool-calling]
 
 ## Dependency graph edges:
   agent-objects -> vector-store
   agent-topology -> vector-store
-  langchain4j-integration -> vector-store
   vector-store -> agent-node
   vector-store -> agent
   vector-store -> tool-calling

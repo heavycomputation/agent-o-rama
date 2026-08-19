@@ -4,10 +4,7 @@
    [com.rpl.agent-o-rama :as aor]
    [com.rpl.agent.basic.tools-agent :refer [ToolsAgentModule]]
    [com.rpl.rama :as rama]
-   [com.rpl.rama.test :as rtest])
-  (:import
-   [dev.langchain4j.data.message
-    ToolExecutionResultMessage]))
+   [com.rpl.rama.test :as rtest]))
 
 (deftest tools-agent-test
   (System/gc)
@@ -42,10 +39,10 @@
               ;; response
               (is (or (contains? prompt-result :tool-results)
                       (contains? prompt-result :response)))
+              ;; Tool results are {:role :tool ...} messages; :content holds
+              ;; the tool's output
               (is (= [(str exp)]
-                     (mapv
-                      #(.text ^ToolExecutionResultMessage %)
-                      (:tool-results prompt-result)))))))
+                     (mapv :content (:tool-results prompt-result)))))))
 
         (testing "handles mixed prompts that may or may not trigger tools"
           (let [prompts ["Hello there!" ; Likely no tools

@@ -37,7 +37,7 @@ Boolean evaluator assessing whether outputs meet length constraints.
 - `threshold` - Maximum character count for output to be considered concise (default: "300")
 
 **Features:**
-- Works with strings and LangChain4j message types
+- Works with strings and neutral message maps ({:role ... :content ...})
 - Calculates UserMessage length as sum of TextContent lengths
 - Ignores non-text content in message evaluation
 

@@ -7,10 +7,6 @@
   com.rpl.agent-o-rama.model/chat). Being plain data, they serialize through
   Rama and can be built/inspected/transformed with normal Clojure functions.
 
-  This is the provider-neutral replacement for
-  com.rpl.agent-o-rama.langchain4j.json, and follows the same argument
-  conventions.
-
   Example:
   <pre>
   (schema/object

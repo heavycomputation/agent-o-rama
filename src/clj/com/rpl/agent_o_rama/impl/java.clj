@@ -54,13 +54,36 @@
        @options
      ))))
 
+(defn- ->clj-data
+  ;; deep-converts Java maps/lists (e.g. Map.of/List.of) to Clojure data so
+  ;; tool specs embed cleanly in module definitions
+  [x]
+  (cond
+    (instance? java.util.Map x)
+    (into {}
+          (map (fn [[k v]] [k (->clj-data v)]))
+          x)
+
+    (instance? java.util.List x)
+    (into [] (map ->clj-data) x)
+
+    :else x))
+
+(defn- java-tool-spec
+  [spec]
+  (into {}
+        (map (fn [[k v]] [(if (string? k) (keyword k) k) (->clj-data v)]))
+        spec))
+
 (defn create-tool-info
   [tool-spec jfn]
-  (tools/tool-info tool-spec (h/convert-jfn jfn)))
+  (tools/tool (java-tool-spec tool-spec) (h/convert-jfn jfn)))
 
 (defn create-tool-info-with-context
   [tool-spec jfn]
-  (tools/tool-info tool-spec (h/convert-jfn jfn) {:include-context? true}))
+  (tools/tool (java-tool-spec tool-spec)
+              (h/convert-jfn jfn)
+              {:include-context? true}))
 
 
 (defn mk-evaluator-builder-options

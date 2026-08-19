@@ -5,7 +5,7 @@
         [com.rpl.rama.path])
   (:require
    [com.rpl.agent-o-rama :as aor]
-   [com.rpl.agent-o-rama.langchain4j :as lc4j]
+   [com.rpl.agent-o-rama.model :as model]
    [com.rpl.agent-o-rama.impl.agent-node :as anode]
    [com.rpl.agent-o-rama.impl.analytics :as ana]
    [com.rpl.agent-o-rama.impl.core :as i]
@@ -30,17 +30,7 @@
    [com.rpl.aortest
     TestSnippets]
    [com.rpl.rama.helpers
-    TopologyUtils]
-   [dev.langchain4j.data.message
-    AiMessage
-    UserMessage]
-   [dev.langchain4j.model.chat
-    ChatModel]
-   [dev.langchain4j.model.chat.response
-    ChatResponse$Builder]
-   [dev.langchain4j.model.output
-    FinishReason
-    TokenUsage]))
+    TopologyUtils]))
 
 (defn ai-stats [& args] (apply aor-types/->AgentInvokeStatsImpl args))
 (defn bai-stats [& args] (apply aor-types/->BasicAgentInvokeStatsImpl args))
@@ -231,19 +221,21 @@
           {"abc" (op-stats 1 3)})))
       )))
 
-(defrecord MockChatModel []
-  ChatModel
-  (doChat [this request]
-    (let [^UserMessage m (-> request
-                             .messages
-                             last)
-          c (count (.singleText m))]
-      (-> (ChatResponse$Builder.)
-          (.aiMessage (AiMessage. "!!!"))
-          (.finishReason FinishReason/STOP)
-          (.modelName "aor-model")
-          (.tokenUsage (TokenUsage. (int c) (int (+ c 10)) (int (+ c 15))))
-          .build))))
+(defrecord MockChatProvider []
+  model/ChatProvider
+  (-provider-info [this] {:provider :mock :model "aor-model"})
+  (-chat [this request]
+    (let [c (count (model/content-text
+                    (:content (last (:messages request)))))]
+      {:message       {:role :assistant :content "!!!"}
+       :text          "!!!"
+       :finish-reason :stop
+       :model         "aor-model"
+       :usage         {:input-tokens  c
+                       :output-tokens (+ c 10)
+                       :total-tokens  (+ c 15)}}))
+  (-stream-chat [this request _on-delta]
+    (model/-chat this request)))
 
 (deftest agent-trace-analytics-test
   (with-open [ipc (rtest/create-ipc)]
@@ -254,7 +246,7 @@
         (aor/declare-agent-object-builder
          topology
          "my-model"
-         (fn [setup] (->MockChatModel)))
+         (fn [setup] (->MockChatProvider)))
         (-> topology
             (aor/new-agent "foo")
             (aor/node
@@ -263,8 +255,8 @@
              (fn [agent-node]
                (let [bar   (aor/agent-client agent-node "bar")
                      model (aor/get-agent-object agent-node "my-model")]
-                 (lc4j/basic-chat model "..")
-                 (lc4j/basic-chat model "...")
+                 (model/chat model "..")
+                 (model/chat model "...")
                  (aor/emit! agent-node
                             "node1"
                             (aor/agent-invoke bar)))))
@@ -274,7 +266,7 @@
              (fn [agent-node v]
                (let [model (aor/get-agent-object agent-node "my-model")]
                  (aor/record-nested-op! agent-node :other 1 3 {})
-                 (lc4j/basic-chat model "..........")
+                 (model/chat model "..........")
                  (aor/result! agent-node v)))
             ))
         (-> topology
@@ -289,7 +281,7 @@
              nil
              (fn [agent-node]
                (let [model (aor/get-agent-object agent-node "my-model")]
-                 (lc4j/basic-chat model ".")
+                 (model/chat model ".")
                  (aor/result! agent-node :done)
                ))))
         (-> topology

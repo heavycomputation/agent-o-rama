@@ -3,34 +3,22 @@
   Provides per-thread summarisation and memory."
   (:require
    [com.rpl.agent-o-rama :as aor]
-   [com.rpl.agent-o-rama.langchain4j :as lc4j]
+   [com.rpl.agent-o-rama.model :as model]
+   [com.rpl.agent-o-rama.model.openai :as openai]
    [com.rpl.agent-o-rama.store :as store]
    [com.rpl.rama :as rama]
    [com.rpl.rama.path :as path]
-   [com.rpl.rama.test :as rtest])
-  (:import
-   [dev.langchain4j.data.message
-    SystemMessage
-    UserMessage]
-   [dev.langchain4j.model.openai
-    OpenAiStreamingChatModel]))
+   [com.rpl.rama.test :as rtest]))
 
 (aor/defagentmodule ChatbotModule
   [topology]
 
-  (aor/declare-agent-object
-   topology
-   "openai-api-key"
-   (System/getenv "OPENAI_API_KEY"))
-
-  (aor/declare-agent-object-builder
+  (openai/declare-model
    topology
    "openai"
-   (fn [setup]
-     (-> (OpenAiStreamingChatModel/builder)
-         (.apiKey (aor/get-agent-object setup "openai-api-key"))
-         (.modelName "gpt-4o-mini")
-         .build)))
+   {:api-key-env "OPENAI_API_KEY"
+    :model       "gpt-5-mini"
+    :stream?     true})
 
   (aor/declare-key-value-store topology "$$kv-store" Long Object)
 
@@ -50,14 +38,14 @@
                            []
                            cat
                            [(when summary
-                              [(SystemMessage.
+                              [(model/system
                                 (format
                                  "Summary of conversation earlier: %s"
                                  summary))])
                             (:messages checkpoint)
                             messages])
-            response      (lc4j/chat openai (lc4j/chat-request chat-messages))
-            ai-message    (.aiMessage response)
+            response      (model/chat openai {:messages chat-messages})
+            ai-message    (:message response)
             new-messages  (into [] cat
                                 [(:messages checkpoint)
                                  messages
@@ -85,7 +73,7 @@
             store         (aor/get-store agent-node "$$kv-store")
             chat-messages (conj
                            messages
-                           (UserMessage.
+                           (model/user
                             (if summary
                               (format
                                "This is summary of the conversation to date: %s
@@ -93,9 +81,9 @@
                                Extend the summary by taking into account the new messages above."
                                summary)
                               "Create a summary of the conversation above.")))
-            response (lc4j/chat openai (lc4j/chat-request chat-messages))
+            response (model/chat openai {:messages chat-messages})
 
-            new-summary  (.text (.aiMessage response))
+            new-summary  (:text response)
             new-messages (vec (drop (- (count messages) 2) messages))]
         (store/put!
          store
@@ -124,7 +112,7 @@
         (when inputs
           (let [agent-invoke (aor/agent-initiate
                               agent
-                              [(UserMessage. (first inputs))]
+                              [(model/user (first inputs))]
                               {:thread-id thread-id})
                 step         (aor/agent-next-step agent agent-invoke)
                 result       (:result step)]

@@ -11,14 +11,10 @@
   - Human-in-the-loop agent execution patterns"
   (:require
    [com.rpl.agent-o-rama :as aor]
-   [com.rpl.agent-o-rama.langchain4j :as lc4j]
+   [com.rpl.agent-o-rama.model :as model]
+   [com.rpl.agent-o-rama.model.openai :as openai]
    [com.rpl.rama :as rama]
-   [com.rpl.rama.test :as rtest])
-  (:import
-   [dev.langchain4j.data.message
-    UserMessage]
-   [dev.langchain4j.model.openai
-    OpenAiStreamingChatModel]))
+   [com.rpl.rama.test :as rtest]))
 
 (defn human-helpful?
   "Ask user if the response was helpful and loop until valid y/n answer."
@@ -36,17 +32,13 @@
 
 (aor/defagentmodule HumanInputAgentModule
   [topology]
-  (aor/declare-agent-object topology
-                            "openai-api-key"
-                            (System/getenv "OPENAI_API_KEY"))
-  (aor/declare-agent-object-builder
+  (openai/declare-model
    topology
    "openai"
-   (fn [setup]
-     (-> (OpenAiStreamingChatModel/builder)
-         (.apiKey (aor/get-agent-object setup "openai-api-key"))
-         (.modelName "gpt-4o-mini")
-         .build)))
+   {:api-key-env "OPENAI_API_KEY"
+    :model       "gpt-5-mini"
+    :reasoning   {:effort :low}
+    :stream?     true})
   (->
    topology
    (aor/new-agent "HumanInputAgent")
@@ -55,9 +47,7 @@
     nil
     (fn [agent-node ^String user-message]
       (let [openai (aor/get-agent-object agent-node "openai")
-            response (-> (lc4j/chat openai [(UserMessage. user-message)])
-                         .aiMessage
-                         .text)
+            response (:text (model/chat openai [(model/user user-message)]))
             helpful? (human-helpful? agent-node response)]
         (aor/result! agent-node
                      {:response response

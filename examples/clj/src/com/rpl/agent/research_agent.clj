@@ -4,30 +4,16 @@
   (:require
    [clojure.string :as str]
    [com.rpl.agent-o-rama :as aor]
-   [com.rpl.agent-o-rama.langchain4j :as lc4j]
-   [com.rpl.agent-o-rama.langchain4j.json :as lj]
+   [com.rpl.agent-o-rama.model :as model]
+   [com.rpl.agent-o-rama.model.openai :as openai]
+   [com.rpl.agent-o-rama.schema :as schema]
    [com.rpl.rama.aggs :as aggs]
    [com.rpl.rama.test :as rtest]
    [jsonista.core :as j]
    [org.httpkit.client :as http])
   (:import
    [com.rpl.agentorama
-    HumanInputRequest]
-   [dev.langchain4j.data.document
-    Document]
-   [dev.langchain4j.data.message
-    AiMessage
-    SystemMessage
-    UserMessage]
-   [dev.langchain4j.model.openai
-    OpenAiChatModel
-    OpenAiStreamingChatModel]
-   [dev.langchain4j.web.search
-    WebSearchRequest]
-   [dev.langchain4j.web.search.tavily
-    TavilyWebSearchEngine]
-   [java.time
-    Duration]))
+    HumanInputRequest]))
 
 (def ANALYST-INSTRUCTIONS
   "You are tasked with creating a set of AI analyst personas. Follow these instructions carefully:
@@ -49,18 +35,18 @@
   (format ANALYST-INSTRUCTIONS topic human-feedback max-analysts))
 
 (def ANALYST-RESPONSE-SCHEMA
-  (lj/object
+  (schema/strict-object
    {"analysts"
-    (lj/array
+    (schema/array
      "Comprehensive list of analysts with their roles and affiliations."
-     (lj/object
-      "Properties of an analyst"
-      {"affiliation" (lj/string "Primary affiliation of the analyst.")
-       "name"        (lj/string "Name of the analyst.")
-       "role"        (lj/string
+     (schema/strict-object
+      {:description "Properties of an analyst"}
+      {"affiliation" (schema/string "Primary affiliation of the analyst.")
+       "name"        (schema/string "Name of the analyst.")
+       "role"        (schema/string
                       "Role of the analyst in the context of the topic.")
        "description"
-       (lj/string "Description of the analyst focus, concerns, and motives.")
+       (schema/string "Description of the analyst focus, concerns, and motives.")
       })
     )}))
 
@@ -325,27 +311,29 @@ Here are the sections to reflect on for writing: %s")
   (let [titles (take max-docs (wiki-search query))]
     (mapv wiki-extract titles)))
 
-(defn tavily-web-search-engine
-  [api-key]
-  (-> (TavilyWebSearchEngine/builder)
-      (.apiKey api-key)
-      (.excludeDomains ["en.wikipedia.org"])
-      (.timeout (Duration/ofMinutes 1))
-      .build))
-
 (defn tavily-search
-  [^TavilyWebSearchEngine tavily terms max-results]
-  (.toDocuments
-   (.search tavily
-            (WebSearchRequest/from terms (int max-results)))))
+  "Performs a Tavily web search, returning a vector of result maps with
+  \"url\" and \"content\" keys."
+  [api-key terms max-results]
+  (let [{:keys [status body]}
+        @(http/post
+          "https://api.tavily.com/search"
+          {:headers {"Content-Type" "application/json"}
+           :body    (j/write-value-as-string
+                     {"api_key"         api-key
+                      "query"           terms
+                      "max_results"     max-results
+                      "exclude_domains" ["en.wikipedia.org"]})
+           :timeout 60000})]
+    (if (= status 200)
+      (vec (get (j/read-value body STR-MAPPER) "results"))
+      (throw (ex-info "Tavily search failed" {:status status :body body})))))
 
 (defn generate-search-query*
   [openai messages]
-  (-> (lc4j/chat openai
-                 (concat [(SystemMessage. SEARCH-INSTRUCTIONS)]
-                         messages))
-      .aiMessage
-      .text))
+  (:text (model/chat openai
+                     (into [(model/system SEARCH-INSTRUCTIONS)]
+                           messages))))
 
 (defn generate-search-query
   [openai messages]
@@ -360,44 +348,37 @@ Here are the sections to reflect on for writing: %s")
         (recur
          (conj
           messages
-          (UserMessage.
+          (model/user
            (format
             "You last generated: %s\nTry again and keep the query under 400 chars."
             q)))
          (inc iters))
       ))))
 
-(defn user-message-name
-  [^UserMessage m]
-  (.name m))
-
 (defn extract-interview
   [messages]
   (reduce
    (fn [curr m]
      (str curr
-          (cond
-            (instance? UserMessage m)
-            (str (if (= (user-message-name m) "expert")
+          (case (:role m)
+            :user
+            (str (if (= (:name m) "expert")
                    "Expert: "
                    "Human: ")
-                 (.singleText ^UserMessage m)
+                 (model/content-text (:content m))
                  "\n\n")
 
-            (instance? AiMessage m)
-            (str "AI: " (.text ^AiMessage m) "\n\n")
+            :assistant
+            (str "AI: " (model/content-text (:content m)) "\n\n")
 
-            :else
             (throw (ex-info "Unexpected message" {:message m}))
           )))
    ""
    messages))
 
 (defn chat-and-get-text
-  ^String [model request]
-  (-> (lc4j/chat model request)
-      .aiMessage
-      .text))
+  ^String [chat-model request]
+  (:text (model/chat chat-model request)))
 
 (defn human-yes?
   [agent-node prompt]
@@ -408,30 +389,19 @@ Here are the sections to reflect on for writing: %s")
 
 (aor/defagentmodule ResearchAgentModule
   [topology]
-  (aor/declare-agent-object topology "openai-api-key" (System/getenv "OPENAI_API_KEY"))
   (aor/declare-agent-object topology "tavily-api-key" (System/getenv "TAVILY_API_KEY"))
 
-  (aor/declare-agent-object-builder
+  (openai/declare-model
    topology
    "openai"
-   (fn [setup]
-     (-> (OpenAiStreamingChatModel/builder)
-         (.apiKey (aor/get-agent-object setup "openai-api-key"))
-         (.modelName "gpt-4o-mini")
-         .build)))
-  (aor/declare-agent-object-builder
+   {:api-key-env "OPENAI_API_KEY"
+    :model       "gpt-5-mini"
+    :stream?     true})
+  (openai/declare-model
    topology
    "openai-non-streaming"
-   (fn [setup]
-     (-> (OpenAiChatModel/builder)
-         (.apiKey (aor/get-agent-object setup "openai-api-key"))
-         (.modelName "gpt-4o-mini")
-         .build)))
-  (aor/declare-agent-object-builder
-   topology
-   "tavily"
-   (fn [setup]
-     (tavily-web-search-engine (aor/get-agent-object setup "tavily-api-key"))))
+   {:api-key-env "OPENAI_API_KEY"
+    :model       "gpt-5-mini"})
   (->
     topology
     (aor/new-agent "researcher")
@@ -441,18 +411,18 @@ Here are the sections to reflect on for writing: %s")
      (fn [agent-node human-feedback options]
        (let [{:strs [topic max-analysts max-turns] :as options}
              (merge {"max-analysts" 4 "max-turns" 2} options)
-             ;; - JSON schemas not supported by streaming model, so have to use non-streaming here
+             ;; - structured JSON output isn't useful to stream, so use the
+             ;;   non-streaming model here
              openai (aor/get-agent-object agent-node "openai-non-streaming")
-             res    (-> openai
-                        (chat-and-get-text
-                         (lc4j/chat-request
-                          [(analyst-instructions topic
-                                                 human-feedback
-                                                 max-analysts)]
-                          {:response-format (lc4j/json-response-format
-                                             "analysts"
-                                             ANALYST-RESPONSE-SCHEMA)}))
-                        (j/read-value STR-MAPPER))]
+             res    (:parsed
+                     (model/chat
+                      openai
+                      {:messages      [(model/user
+                                        (analyst-instructions topic
+                                                              human-feedback
+                                                              max-analysts))]
+                       :output-schema {:name   "analysts"
+                                       :schema ANALYST-RESPONSE-SCHEMA}}))]
          (aor/emit! agent-node "feedback" (get res "analysts") options)
        )))
     (aor/node
@@ -481,10 +451,10 @@ Here are the sections to reflect on for writing: %s")
      (fn [agent-node persona messages max-turns]
        (let [openai       (aor/get-agent-object agent-node "openai")
              instr        (generate-question-instructions persona)
-             question     (-> (lc4j/chat openai
-                                         (concat [(SystemMessage. instr)]
-                                                 messages))
-                              .aiMessage)
+             question     (:message
+                           (model/chat openai
+                                       (into [(model/system instr)]
+                                             messages)))
              new-messages (conj messages question)
              search-query (generate-search-query openai new-messages)]
          (aor/emit! agent-node "search-web" search-query)
@@ -495,16 +465,14 @@ Here are the sections to reflect on for writing: %s")
      "search-web"
      "agg-research"
      (fn [agent-node search-query]
-       (let [tavily (aor/get-agent-object agent-node "tavily")
-             docs   (tavily-search tavily search-query 3)]
-         (doseq [^Document doc docs]
+       (let [api-key (aor/get-agent-object agent-node "tavily-api-key")
+             docs    (tavily-search api-key search-query 3)]
+         (doseq [doc docs]
            (aor/emit! agent-node
                       "agg-research"
                       (format WEB-DOCUMENT-TEMPLATE
-                              (-> doc
-                                  .metadata
-                                  (.getString "url"))
-                              (.text doc))))
+                              (get doc "url")
+                              (get doc "content"))))
        )))
     (aor/node
      "search-wikipedia"
@@ -527,13 +495,16 @@ Here are the sections to reflect on for writing: %s")
        (let [openai       (aor/get-agent-object agent-node "openai")
              context      (str/join "\n---\n" searches)
              instr        (answer-instructions persona context)
-             answer       (chat-and-get-text openai (concat [(SystemMessage. instr)] messages))
-             new-messages (conj messages (UserMessage. "expert" answer))
+             answer       (chat-and-get-text openai
+                                             (into [(model/system instr)]
+                                                   messages))
+             new-messages (conj messages
+                                (assoc (model/user answer) :name "expert"))
              num-turns    (count
                            (filter
                             (fn [m]
-                              (and (instance? UserMessage m)
-                                   (= "expert" (.name ^UserMessage m))))
+                              (and (= :user (:role m))
+                                   (= "expert" (:name m))))
                             new-messages))]
          (if (>= num-turns max-turns)
            (aor/emit! agent-node "write-section" persona new-messages context)
@@ -548,9 +519,9 @@ Here are the sections to reflect on for writing: %s")
              instr     (section-writer-instructions persona)
              section   (chat-and-get-text
                         openai
-                        [(SystemMessage. instr)
-                         (UserMessage. (str "Here is the interview:\n" interview))
-                         (UserMessage. (str "Here are the sources:\n" context))])]
+                        [(model/system instr)
+                         (model/user (str "Here is the interview:\n" interview))
+                         (model/user (str "Here are the sources:\n" context))])]
          (aor/emit! agent-node "agg-sections" section)
        )))
     (aor/agg-node
@@ -574,8 +545,8 @@ Here are the sections to reflect on for writing: %s")
              instr  (report-writer-instructions topic sections)
              text   (chat-and-get-text
                      openai
-                     [(SystemMessage. instr)
-                      (UserMessage. "Write a report based upon these memos.")])]
+                     [(model/system instr)
+                      (model/user "Write a report based upon these memos.")])]
          (aor/emit! agent-node "finish-report" "report" text)
        )))
     (aor/node
@@ -586,8 +557,8 @@ Here are the sections to reflect on for writing: %s")
              instr  (intro-conclusion-instructions topic sections)
              text   (chat-and-get-text
                      openai
-                     [(SystemMessage. instr)
-                      (UserMessage. "Write the report introduction")])]
+                     [(model/system instr)
+                      (model/user "Write the report introduction")])]
          (aor/emit! agent-node "finish-report" "intro" text)
        )))
     (aor/node
@@ -598,8 +569,8 @@ Here are the sections to reflect on for writing: %s")
              instr  (intro-conclusion-instructions topic sections)
              text   (chat-and-get-text
                      openai
-                     [(SystemMessage. instr)
-                      (UserMessage. "Write the report conclusion")])]
+                     [(model/system instr)
+                      (model/user "Write the report conclusion")])]
          (aor/emit! agent-node "finish-report" "conclusion" text)
        )))
     (aor/agg-node

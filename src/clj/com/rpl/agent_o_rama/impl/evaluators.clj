@@ -8,8 +8,7 @@
    [com.rpl.agent-o-rama.impl.helpers :as h]
    [com.rpl.agent-o-rama.impl.pobjects :as po]
    [com.rpl.agent-o-rama.impl.types :as aor-types]
-   [com.rpl.agent-o-rama.langchain4j :as lc4j]
-   [com.rpl.agent-o-rama.langchain4j.json :as lj]
+   [com.rpl.agent-o-rama.model :as model]
    [com.rpl.rama.ops :as ops]
    [expound.alpha :as expound]
    [jsonista.core :as j])
@@ -28,13 +27,7 @@
     RemoveHumanFeedbackQueue
     RemoveHumanMetric
     ResolveHumanFeedbackQueueItem
-    UpdateHumanFeedbackQueue]
-   [dev.langchain4j.data.message
-    AiMessage
-    SystemMessage
-    TextContent
-    ToolExecutionResultMessage
-    UserMessage]))
+    UpdateHumanFeedbackQueue]))
 
 (spec/def ::description string?)
 (spec/def ::default string?)
@@ -67,36 +60,16 @@
   String
   (message-length [this] (count this))
 
-  AiMessage
+  ;; neutral message maps ({:role ... :content ...}) measure the length of
+  ;; their text content; other maps and values measure their printed form
+  clojure.lang.IPersistentMap
   (message-length [this]
-    (-> this
-        .text
-        count))
+    (if (:role this)
+      (count (or (model/content-text (:content this)) ""))
+      (count (str this))))
 
-  SystemMessage
-  (message-length [this]
-    (-> this
-        .text
-        count))
-
-  ToolExecutionResultMessage
-  (message-length [this]
-    (-> this
-        .text
-        count))
-
-  UserMessage
-  (message-length [this]
-    (let [contents (filter #(instance? TextContent %) (.contents this))]
-      (reduce
-       +
-       0
-       (mapv
-        (fn [^TextContent tc]
-          (-> tc
-              .text
-              count))
-        contents)))))
+  Object
+  (message-length [this] (count (str this))))
 
 (def DEFAULT-LLM-OUTPUT-SCHEMA
   "{
@@ -126,7 +99,11 @@ Be strict: minor wording differences are acceptable, but factual errors, omissio
    {:type        :regular
     :builder-fn
     (fn [params]
-      (let [temperature     (Double/parseDouble (get params "temperature"))
+      (let [temperature     (let [t (get params "temperature")]
+                              ;; blank = provider default; reasoning models
+                              ;; reject an explicit temperature
+                              (when-not (str/blank? t)
+                                (Double/parseDouble t)))
             prompt-template (get params "prompt")
             model-name      (get params "model")
             output-schema   (get params "outputSchema")]
@@ -135,19 +112,15 @@ Be strict: minor wording differences are acceptable, but factual errors, omissio
                 prompt (-> prompt-template
                            (str/replace "%input" (str input))
                            (str/replace "%output" (str output))
-                           (str/replace "%referenceOutput" (str ref-output)))]
-            (-> model
-                (lc4j/chat
-                 (lc4j/chat-request
-                  [prompt]
-                  {:temperature     temperature
-                   :response-format
-                   (lc4j/json-response-format
-                    "Evaluation"
-                    (lj/from-json-string output-schema))}))
-                .aiMessage
-                .text
-                j/read-value)))))
+                           (str/replace "%referenceOutput" (str ref-output)))
+                res    (model/chat
+                        model
+                        {:messages      [prompt]
+                         :temperature   temperature
+                         :output-schema {:name   "Evaluation"
+                                         :schema (j/read-value output-schema)}})]
+            (or (:parsed res)
+                (j/read-value (:text res)))))))
     :description
     "Define an LLM judge with customizable prompt, model, temperature, and output schema. By configuring the output schema with multiple keys, the judge can return scores for multiple evaluations at once."
     :options
@@ -163,8 +136,8 @@ Be strict: minor wording differences are acceptable, but factual errors, omissio
 
       "temperature"
       {:description
-       "Floating-point temperature of the LLM"
-       :default     "0.0"}
+       "Floating-point temperature of the LLM. Leave blank to use the provider default (required for reasoning models, which reject an explicit temperature)"
+       :default     ""}
       "outputSchema"
       {:description
        "JSON schema for the output of the LLM. Each key of the output is a separate evaluation score."
@@ -179,7 +152,7 @@ Be strict: minor wording differences are acceptable, but factual errors, omissio
         (fn [fetcher input ref-output output]
           {"concise?" (<= (message-length output) len)})))
     :description
-    "Boolean evaluator on whether the output's length is below a threshold. Works on strings or Langchain4j message types. User message length is calculated as the sum of the lengths of text contents within, with other types of content ignored."
+    "Boolean evaluator on whether the output's length is below a threshold. Works on strings or message maps ({:role ... :content ...}); message length is the length of the message's text content, with other types of content ignored."
     :options
     {:params
      {"threshold"

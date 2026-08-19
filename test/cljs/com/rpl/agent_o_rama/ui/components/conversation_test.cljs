@@ -5,43 +5,28 @@
    [com.rpl.agent-o-rama.ui.components.conversation :as conversation]))
 
 (deftest chat-message-test
-  (testing "chat-message? detects LangChain4j messages"
-    (testing "recognizes SystemMessage with string keys"
+  (testing "chat-message? detects neutral message maps"
+    (testing "recognizes messages with keyword keys/values"
       (is (conversation/chat-message?
-           {"_aor-type" "dev.langchain4j.data.message.SystemMessage"
-            "text"      "You are a helpful assistant"})))
-
-    (testing "recognizes UserMessage with string keys"
+           {:role :system :content "You are a helpful assistant"}))
+      (is (conversation/chat-message? {:role :user :content "Hello"}))
+      (is (conversation/chat-message? {:role :assistant :content "Hi there!"}))
       (is (conversation/chat-message?
-           {"_aor-type" "dev.langchain4j.data.message.UserMessage"
-            "text"      "Hello"})))
+           {:role :tool :tool-call-id "c1" :name "add" :content "3"})))
 
-    (testing "recognizes AiMessage with string keys"
+    (testing "recognizes messages with string keys/values (JSON round trip)"
       (is (conversation/chat-message?
-           {"_aor-type" "dev.langchain4j.data.message.AiMessage"
-            "text"      "Hi there!"})))
-    
-    (testing "recognizes SystemMessage with keyword keys"
-      (is (conversation/chat-message?
-           {:_aor-type "dev.langchain4j.data.message.SystemMessage"
-            :text      "You are a helpful assistant"})))
+           {"role" "system" "content" "You are a helpful assistant"}))
+      (is (conversation/chat-message? {"role" "user" "content" "Hello"}))
+      (is (conversation/chat-message? {"role" "assistant"
+                                       "content" "Hi there!"})))
 
-    (testing "recognizes UserMessage with keyword keys"
-      (is (conversation/chat-message?
-           {:_aor-type "dev.langchain4j.data.message.UserMessage"
-            :text      "Hello"})))
+    (testing "rejects maps with unknown roles"
+      (is (false? (conversation/chat-message? {:role :wizard
+                                               :content "abracadabra"}))))
 
-    (testing "recognizes AiMessage with keyword keys"
-      (is (conversation/chat-message?
-           {:_aor-type "dev.langchain4j.data.message.AiMessage"
-            :text      "Hi there!"})))
-
-    (testing "rejects non-message maps"
-      (is (false? (conversation/chat-message? {"_aor-type" "some.other.Type"
-                                               "text"      "not a message"}))))
-
-    (testing "rejects maps without _aor-type"
-      (is (false? (conversation/chat-message? {"text" "no type field"}))))
+    (testing "rejects maps without a role"
+      (is (false? (conversation/chat-message? {"content" "no role"}))))
 
     (testing "rejects non-maps"
       (is (false? (conversation/chat-message? "not a map")))
@@ -49,164 +34,108 @@
 
 (deftest extract-message-role-and-text-test
   (testing "extract-message-role-and-text extracts role and text correctly"
-    (testing "extracts role from SystemMessage"
-      (let [msg    {"_aor-type" "dev.langchain4j.data.message.SystemMessage"
-                    "text"      "You are a helpful assistant"}
-            result (conversation/extract-message-role-and-text msg)]
-        (is (= "SystemMessage" (:role result)))
+    (testing "system message"
+      (let [result (conversation/extract-message-role-and-text
+                    {:role :system :content "You are a helpful assistant"})]
+        (is (= "system" (:role result)))
         (is (= "You are a helpful assistant" (:text result)))))
 
-    (testing "extracts role from UserMessage"
-      (let [msg    {"_aor-type" "dev.langchain4j.data.message.UserMessage"
-                    "text"      "Hello"}
-            result (conversation/extract-message-role-and-text msg)]
-        (is (= "UserMessage" (:role result)))
+    (testing "user message"
+      (let [result (conversation/extract-message-role-and-text
+                    {:role :user :content "Hello"})]
+        (is (= "user" (:role result)))
         (is (= "Hello" (:text result)))))
 
-    (testing "extracts role from AiMessage"
-      (let [msg    {"_aor-type" "dev.langchain4j.data.message.AiMessage"
-                    "text"      "Hi there"}
-            result (conversation/extract-message-role-and-text msg)]
-        (is (= "AiMessage" (:role result)))
-        (is (= "Hi there" (:text result)))))
-
-    (testing "extracts text from contents array with default separator (newline)"
-      (let [msg    {"_aor-type" "dev.langchain4j.data.message.UserMessage"
-                    "contents"  [{"text" "Part 1"} {"text" "Part 2"}]}
-            result (conversation/extract-message-role-and-text msg)]
+    (testing "assistant message with content blocks"
+      (let [result (conversation/extract-message-role-and-text
+                    {:role :assistant
+                     :content [{:type :text :text "Part 1"}
+                               {:type :text :text "Part 2"}]})]
+        (is (= "assistant" (:role result)))
         (is (= "Part 1\nPart 2" (:text result)))))
 
-    (testing "extracts text from contents array with custom separator (space)"
-      (let [msg    {"_aor-type" "dev.langchain4j.data.message.UserMessage"
-                    "contents"  [{"text" "Part 1"} {"text" "Part 2"}]}
-            result (conversation/extract-message-role-and-text msg " ")]
+    (testing "custom separator"
+      (let [result (conversation/extract-message-role-and-text
+                    {:role :assistant
+                     :content [{:type :text :text "Part 1"}
+                               {:type :text :text "Part 2"}]}
+                    " ")]
         (is (= "Part 1 Part 2" (:text result)))))
 
-    (testing "extracts text from contents single object"
-      (let [msg    {"_aor-type" "dev.langchain4j.data.message.UserMessage"
-                    "contents"  {"text" "Content text"}}
-            result (conversation/extract-message-role-and-text msg)]
-        (is (= "Content text" (:text result)))))
+    (testing "assistant tool-call blocks render as tool calls"
+      (let [result (conversation/extract-message-role-and-text
+                    {:role :assistant
+                     :content [{:type :tool-call :id "c1" :name "add"
+                                :args {"a" 1}}]})]
+        (is (str/includes? (:text result) "Tool call: add"))
+        (is (str/includes? (:text result) "ID: c1"))))
 
-    (testing "filters out nil text from contents array"
-      (let [msg    {"_aor-type" "dev.langchain4j.data.message.UserMessage"
-                    "contents"  [{"text" "Part 1"} {} {"text" "Part 2"}]}
-            result (conversation/extract-message-role-and-text msg " ")]
-        (is (= "Part 1 Part 2" (:text result)))))
+    (testing "reasoning blocks render with summary"
+      (let [result (conversation/extract-message-role-and-text
+                    {:role :assistant
+                     :content [{:type :reasoning :summary "thinking hard"}
+                               {:type :text :text "answer"}]})]
+        (is (str/includes? (:text result) "Reasoning: thinking hard"))
+        (is (str/includes? (:text result) "answer"))))
 
-    (testing "handles missing text field"
-      (let [msg    {"_aor-type" "dev.langchain4j.data.message.UserMessage"}
-            result (conversation/extract-message-role-and-text msg)]
-        (is (= "UserMessage" (:role result)))
-        (is (nil? (:text result)))))
+    (testing "tool result message includes tool name and id"
+      (let [result (conversation/extract-message-role-and-text
+                    {:role :tool :tool-call-id "c1" :name "add"
+                     :content "3"})]
+        (is (= "tool" (:role result)))
+        (is (str/includes? (:text result) "add result"))
+        (is (str/includes? (:text result) "ID: c1"))
+        (is (str/includes? (:text result) "3"))))
 
-    (testing "handles missing _aor-type"
-      (let [msg    {"text" "Some text"}
-            result (conversation/extract-message-role-and-text msg)]
-        (is (nil? (:role result)))
-        (is (= "Some text" (:text result)))))))
-
-(deftest extract-message-role-and-text-keyword-keys-test
-  (testing "extract-message-role-and-text works with keyword keys"
-    (testing "extracts role from SystemMessage with keyword keys"
-      (let [msg    {:_aor-type "dev.langchain4j.data.message.SystemMessage"
-                    :text      "You are a helpful assistant"}
-            result (conversation/extract-message-role-and-text msg)]
-        (is (= "SystemMessage" (:role result)))
-        (is (= "You are a helpful assistant" (:text result)))))
-
-    (testing "extracts role from UserMessage with keyword keys"
-      (let [msg    {:_aor-type "dev.langchain4j.data.message.UserMessage"
-                    :text      "Hello"}
-            result (conversation/extract-message-role-and-text msg)]
-        (is (= "UserMessage" (:role result)))
+    (testing "string-keyed messages work"
+      (let [result (conversation/extract-message-role-and-text
+                    {"role" "user" "content" "Hello"})]
+        (is (= "user" (:role result)))
         (is (= "Hello" (:text result)))))
 
-    (testing "extracts role from AiMessage with keyword keys"
-      (let [msg    {:_aor-type "dev.langchain4j.data.message.AiMessage"
-                    :text      "Hi there"}
-            result (conversation/extract-message-role-and-text msg)]
-        (is (= "AiMessage" (:role result)))
-        (is (= "Hi there" (:text result)))))
+    (testing "plain strings are treated as user messages"
+      (let [result (conversation/extract-message-role-and-text "Hello")]
+        (is (= "user" (:role result)))
+        (is (= "Hello" (:text result)))))
 
-    (testing "extracts text from contents array with keyword keys and default separator"
-      (let [msg    {:_aor-type "dev.langchain4j.data.message.UserMessage"
-                    :contents  [{:text "Part 1"} {:text "Part 2"}]}
-            result (conversation/extract-message-role-and-text msg)]
-        (is (= "Part 1\nPart 2" (:text result)))))
-
-    (testing "extracts text from contents array with keyword keys and custom separator"
-      (let [msg    {:_aor-type "dev.langchain4j.data.message.UserMessage"
-                    :contents  [{:text "Part 1"} {:text "Part 2"}]}
-            result (conversation/extract-message-role-and-text msg " ")]
-        (is (= "Part 1 Part 2" (:text result)))))
-
-    (testing "extracts text from contents single object with keyword keys"
-      (let [msg    {:_aor-type "dev.langchain4j.data.message.UserMessage"
-                    :contents  {:text "Content text"}}
-            result (conversation/extract-message-role-and-text msg)]
-        (is (= "Content text" (:text result)))))
-
-    (testing "handles missing text field with keyword keys"
-      (let [msg    {:_aor-type "dev.langchain4j.data.message.UserMessage"}
-            result (conversation/extract-message-role-and-text msg)]
-        (is (= "UserMessage" (:role result)))
+    (testing "missing content"
+      (let [result (conversation/extract-message-role-and-text
+                    {:role :user})]
+        (is (= "user" (:role result)))
         (is (nil? (:text result)))))))
 
 (deftest conversation-test
   (testing "conversation? detects conversation vectors"
     (testing "recognizes valid conversation"
       (is (conversation/conversation?
-           [{"_aor-type" "dev.langchain4j.data.message.SystemMessage"
-             "text"      "You are helpful"}
-            {"_aor-type" "dev.langchain4j.data.message.UserMessage"
-             "text"      "Hi"}
-            {"_aor-type" "dev.langchain4j.data.message.AiMessage"
-             "text"      "Hello!"}])))
+           [{:role :system :content "You are helpful"}
+            {:role :user :content "Hi"}
+            {:role :assistant :content "Hello!"}])))
 
     (testing "recognizes single message as conversation"
-      (is (conversation/conversation?
-           [{"_aor-type" "dev.langchain4j.data.message.UserMessage"
-             "text"      "Hi"}])))
+      (is (conversation/conversation? [{:role :user :content "Hi"}])))
 
     (testing "rejects empty vector"
       (is (not (conversation/conversation? []))))
 
     (testing "rejects vector with non-messages"
       (is (not (conversation/conversation?
-                [{"_aor-type" "dev.langchain4j.data.message.UserMessage"
-                  "text"      "Hi"}
+                [{:role :user :content "Hi"}
                  {"some" "other data"}]))))
 
     (testing "rejects non-sequential data"
-      (is (not (conversation/conversation?
-                {"_aor-type" "dev.langchain4j.data.message.UserMessage"
-                 "text"      "Hi"})))
+      (is (not (conversation/conversation? {:role :user :content "Hi"})))
       (is (not (conversation/conversation? "not a vector")))
       (is (not (conversation/conversation? nil))))))
-
-(deftest conversation-integration-test
-  (testing "conversation data in nested structures"
-    (testing "should detect conversation in map value"
-      (let [data {:messages [{"_aor-type" "dev.langchain4j.data.message.UserMessage"
-                              "text"      "Hello"}
-                             {"_aor-type" "dev.langchain4j.data.message.AiMessage"
-                              "text"      "Hi there!"}]}]
-        (is (true? (conversation/conversation? (:messages data))))))
-
-    (testing "should not treat list of non-messages as conversation"
-      (let [data {:items [{"name" "item1"} {"name" "item2"}]}]
-        (is (false? (conversation/conversation? (:items data))))))))
 
 (deftest conversation-preview-text-test
   (testing "conversation-preview-text generates correct preview"
     (testing "returns a vector of preview lines without truncation"
-      (let [messages [{"_aor-type" "dev.langchain4j.data.message.SystemMessage"
-                       "text"      "You are a helpful assistant"}
-                      {"_aor-type" "dev.langchain4j.data.message.UserMessage"
-                       "text" "Hello, can you help me with something today? I have a question."}
-                      {"_aor-type" "dev.langchain4j.data.message.AiMessage"
-                       "text"      "Of course! I'd be happy to help you."}]
+      (let [messages [{:role :system :content "You are a helpful assistant"}
+                      {:role :user
+                       :content "Hello, can you help me with something today? I have a question."}
+                      {:role :assistant
+                       :content "Of course! I'd be happy to help you."}]
             preview  (conversation/conversation-preview-text messages)]
         (is (vector? preview))
         (is (= 3 (count preview)))
@@ -215,39 +144,31 @@
         (is (= "AI: Of course! I'd be happy to help you." (nth preview 2)))))
 
     (testing "indicates when there are more messages"
-      (let [messages [{"_aor-type" "dev.langchain4j.data.message.SystemMessage"
-                       "text"      "System"}
-                      {"_aor-type" "dev.langchain4j.data.message.UserMessage"
-                       "text"      "User 1"}
-                      {"_aor-type" "dev.langchain4j.data.message.AiMessage"
-                       "text"      "AI 1"}
-                      {"_aor-type" "dev.langchain4j.data.message.UserMessage"
-                       "text"      "User 2"}
-                      {"_aor-type" "dev.langchain4j.data.message.AiMessage"
-                       "text"      "AI 2"}]
+      (let [messages [{:role :system :content "System"}
+                      {:role :user :content "User 1"}
+                      {:role :assistant :content "AI 1"}
+                      {:role :user :content "User 2"}
+                      {:role :assistant :content "AI 2"}]
             preview  (conversation/conversation-preview-text messages)]
         (is (= 4 (count preview)))
         (is (= "... (2 more messages)" (last preview)))))
 
-    (testing "handles messages with contents array"
-      (let [messages [{"_aor-type" "dev.langchain4j.data.message.UserMessage"
-                       "contents"  [{"text" "Part 1"} {"text" "Part 2"}]}]
+    (testing "handles messages with content blocks"
+      (let [messages [{:role :user
+                       :content [{:type :text :text "Part 1"}
+                                 {:type :text :text "Part 2"}]}]
             preview  (conversation/conversation-preview-text messages)]
         (is (= ["USER: Part 1 Part 2"] preview))))
 
     (testing "handles empty text"
-      (let [messages [{"_aor-type" "dev.langchain4j.data.message.UserMessage"
-                       "text"      ""}]
+      (let [messages [{:role :user :content ""}]
             preview  (conversation/conversation-preview-text messages)]
         (is (= ["USER: (empty)"] preview))))
 
     (testing "shows exactly 3 messages without more indicator"
-      (let [messages [{"_aor-type" "dev.langchain4j.data.message.UserMessage"
-                       "text"      "1"}
-                      {"_aor-type" "dev.langchain4j.data.message.AiMessage"
-                       "text"      "2"}
-                      {"_aor-type" "dev.langchain4j.data.message.UserMessage"
-                       "text"      "3"}]
+      (let [messages [{:role :user :content "1"}
+                      {:role :assistant :content "2"}
+                      {:role :user :content "3"}]
             preview  (conversation/conversation-preview-text messages)]
         (is (= 3 (count preview)))
         (is (not (str/includes? (str preview) "more messages")))))))
@@ -255,12 +176,9 @@
 (deftest conversation-modal-scrollable-test
   ;; Test that ConversationModal renders with scrollable container
   (testing "ConversationModal has scrollable container"
-    (let [messages [{"_aor-type" "dev.langchain4j.data.message.UserMessage"
-                     "text"      "Message 1"}
-                    {"_aor-type" "dev.langchain4j.data.message.AiMessage"
-                     "text"      "Message 2"}]
+    (let [messages [{:role :user :content "Message 1"}
+                    {:role :assistant :content "Message 2"}]
           modal-element (conversation/ConversationModal {:messages messages})
-          ;; Extract the className from the modal's root div
           modal-props (.-props modal-element)
           class-name (.-className modal-props)]
       (testing "has max-height constraint"

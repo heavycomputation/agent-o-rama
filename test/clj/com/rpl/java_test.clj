@@ -20,14 +20,14 @@
     TestModules
     TestSnippets]))
 
-(deftest openai-tools-agent-test
+(deftest java-tools-agent-test
   (let [options-vol (volatile! [])]
     (with-redefs [tools-impl/hook:new-tools-agent-options (fn [name options]
                                                             (vswap! options-vol
                                                                     conj
                                                                     [name options]))]
-      (when (some? (System/getenv "OPENAI_API_KEY"))
-        (is (= {"a" "8" "m" "54"} (TestModules/runBasicToolsOpenAIAgent)))
+      (do
+        (is (= {"a" "8" "m" "54"} (TestModules/runBasicToolsAgent)))
         (is (= 2 (count @options-vol)))
         (let [[[n1 o1] [n2 o2]] @options-vol]
           (is (= "tools" n1))

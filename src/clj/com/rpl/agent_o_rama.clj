@@ -424,10 +424,9 @@ Example:\n
 <pre>
 (declare-agent-object-builder topology \"openai-model\"
   (fn [setup]
-    (-> (OpenAiChatModel/builder)
-        (.apiKey (get-agent-object setup \"openai-api-key\"))
-        (.modelName \"gpt-4o-mini\")
-        .build))
+    (openai/responses-model
+     {:api-key (get-agent-object setup \"openai-api-key\")
+      :model   \"gpt-5.1\"}))
   {:thread-safe? true})
 </pre>"
   ([agent-topology name afn]
@@ -975,7 +974,7 @@ Returns:\n
 Example:\n
 <pre>
 (let [model (get-agent-object agent-node \"openai-model\")]
-  (lc4j/chat model messages))
+  (model/chat model {:messages messages}))
 </pre>"
   [^AgentObjectFetcher fetch name]
   (.getAgentObject fetch name))

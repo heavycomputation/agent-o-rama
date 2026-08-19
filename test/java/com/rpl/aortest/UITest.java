@@ -18,7 +18,7 @@ public class UITest {
     try (InProcessCluster ipc = InProcessCluster.create()) {
 
       // Launch a simple module to have something for the UI to monitor
-      AgentModule module = new TestModules.BasicToolsOpenAIAgent();
+      AgentModule module = new TestModules.BasicToolsAgent();
       ipc.launchModule(module, new LaunchConfig(1, 1));
 
       // Start UI with default settings
@@ -44,7 +44,7 @@ public class UITest {
     try (InProcessCluster ipc = InProcessCluster.create()) {
 
       // Launch a simple module to have something for the UI to monitor
-      AgentModule module = new TestModules.BasicToolsOpenAIAgent();
+      AgentModule module = new TestModules.BasicToolsAgent();
       ipc.launchModule(module, new LaunchConfig(1, 1));
 
       // Start UI with custom port
@@ -70,7 +70,7 @@ public class UITest {
     try (InProcessCluster ipc = InProcessCluster.create()) {
 
       // Launch a simple module to have something for the UI to monitor
-      AgentModule module = new TestModules.BasicToolsOpenAIAgent();
+      AgentModule module = new TestModules.BasicToolsAgent();
       ipc.launchModule(module, new LaunchConfig(1, 1));
 
       // Start UI

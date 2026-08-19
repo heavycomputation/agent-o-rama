@@ -36,9 +36,9 @@
   - max-retries
 - streaming
   - difference between stream and stream-all
-- langchain4j integration
-  - special JSON format when displaying lc4j types which can be edited
-  - auto-wired streaming for StreamingChatModel
+- native model integration (ChatProvider)
+  - plain-data messages render directly in the UI
+  - auto-wired streaming for streaming-configured providers
   - declared StreamingChatModel is fetched as regular ChatModel and used in blocking fashion
 - forking and how it works
 - runs on virtual threads so all code should be in simple blocking style

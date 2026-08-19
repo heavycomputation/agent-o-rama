@@ -11,7 +11,7 @@ possibly cyclic, graph of nodes. Agents are the primary execution
 entities in the system, defined using `defagentmodule` and created with
 `new-agent`. Agents execute asynchronously and can maintain state
 through stores, communicate via emissions between nodes, and integrate
-with AI models through LangChain4j.
+with AI models through native provider integrations (OpenAI, Anthropic, xAI).
 
 ## [Agent Client](terms/agent-client.md)
 
@@ -199,10 +199,10 @@ requiring a distributed cluster setup. It is a Cluster Manager.
 
 A typed store for simple key-value pairs with specified key/value classes.
 
-## [LangChain4j Integration](terms/langchain4j-integration.md)
+## [Model Integration](terms/model-integration.md)
 
-Integration with the LangChain4j library for AI model interactions,
-providing chat models, tool calling, JSON schema generation, and
+Native provider-neutral integration for AI model interactions,
+providing chat models, tool calling, JSON schema helpers, and
 structured output parsing. Enables seamless AI integration within agent
 execution flows.
 
@@ -316,7 +316,7 @@ when graph definitions change.
 ## [Tool Calling](terms/tool-calling.md)
 
 Integration pattern for connecting AI models with external functions and
-APIs. Agents can define tool specifications using LangChain4j schemas
+APIs. Agents can define tool specifications using plain-data JSON schemas
 and execute tools based on AI model decisions, enabling sophisticated
 AI-driven workflows with external system integration.
 

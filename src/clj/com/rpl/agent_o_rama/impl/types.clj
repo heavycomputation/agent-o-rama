@@ -4,7 +4,6 @@
    [clojure.set :as set]
    [clojure.string :as str]
    [com.rpl.agent-o-rama.impl.helpers :as h]
-   [com.rpl.agent-o-rama.impl.serialize]
    [com.rpl.ramaspecter.defrecord-plus :as drp]
    [rpl.schema.core :as s])
   (:import
@@ -40,8 +39,6 @@
     NippyMap]
    [com.rpl.rama.integration
     TaskGlobalObject]
-   [dev.langchain4j.agent.tool
-    ToolSpecification]
    [java.util
     UUID]
    [java.util.concurrent
@@ -406,10 +403,10 @@
    key :- s/Any])
 
 (defaorrecord ToolInfoImpl
-  ;; tool-specification is either a langchain4j ToolSpecification or a plain
-  ;; data spec map {:name ... :description ... :schema ...} (created with
-  ;; com.rpl.agent-o-rama.tools/tool)
-  [tool-specification :- (s/cond-pre ToolSpecification {s/Keyword s/Any})
+  ;; tool-specification is a plain data spec map
+  ;; {:name ... :description ... :schema ...} created with
+  ;; com.rpl.agent-o-rama.tools/tool
+  [tool-specification :- {s/Keyword s/Any}
    tool-fn :- clojure.lang.IFn
    include-context? :- Boolean]
   ToolInfo

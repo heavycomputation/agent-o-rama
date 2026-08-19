@@ -10,27 +10,21 @@
   - try-summary-evaluator: Testing summary evaluators with multiple examples"
   (:require
    [com.rpl.agent-o-rama :as aor]
+   [com.rpl.agent-o-rama.model.openai :as openai]
    [com.rpl.rama :as rama]
-   [com.rpl.rama.test :as rtest])
-  (:import
-   [dev.langchain4j.model.openai
-    OpenAiChatModel]))
+   [com.rpl.rama.test :as rtest]))
 
 ;;; Agent module with evaluator demonstration
 (aor/defagentmodule ProvidedEvaluatorBuildersModule
   [topology]
 
   ;; Declare OpenAI model for LLM judge evaluator
-  (aor/declare-agent-object-builder
+  ;; Use a test API key since we're just demonstrating the evaluator creation
+  (openai/declare-model
    topology
    "test-model"
-   (fn [_setup]
-     ;; Use a test API key since we're just demonstrating the evaluator creation
-     (-> (OpenAiChatModel/builder)
-         (.apiKey "test-key")
-         (.modelName "gpt-4o-mini")
-         (.temperature 0.0)
-         .build)))
+   {:api-key "test-key"
+    :model   "gpt-4o-mini"})
 
   ;; Simple agent that generates text of different lengths for testing
   (->

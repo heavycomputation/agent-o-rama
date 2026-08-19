@@ -111,10 +111,8 @@
         (str item)))
 
 (comment
-  (def m (new dev.langchain4j.data.message.SystemMessage "test"))
-  (->ui-serializable m)
+  (->ui-serializable {:role :system :content "test"})
   (->ui-serializable 3)
-  (->ui-serializable (into-array [m]))
   )
 
 

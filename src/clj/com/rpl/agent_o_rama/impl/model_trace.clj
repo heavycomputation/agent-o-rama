@@ -1,9 +1,7 @@
 (ns com.rpl.agent-o-rama.impl.model-trace
   "Converts provider-neutral messages/responses (com.rpl.agent-o-rama.model)
   to the string-keyed trace maps stored in nested ops and rendered by the
-  trace UI. Mirrors the output shapes of
-  com.rpl.agent-o-rama.impl.langchain4j-trace so both integration paths
-  render identically."
+  trace UI."
   (:require
    [com.rpl.agent-o-rama.impl.helpers :as h]
    [com.rpl.agent-o-rama.model :as model]))

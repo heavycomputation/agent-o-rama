@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-agent-o-rama is a framework for building parallel, scalable, and stateful AI agents in Java or Clojure. It's built on top of Red Planet Labs' Rama distributed computing platform and integrates with LangChain4j for AI model interactions.
+agent-o-rama is a framework for building parallel, scalable, and stateful AI agents in Java or Clojure. It's built on top of Red Planet Labs' Rama distributed computing platform and ships native provider integrations (OpenAI Responses API, Anthropic Messages API, xAI) for AI model interactions.
 
 @dev/glossary.md
 
@@ -88,7 +88,7 @@ npx playwright test
 ## Key Dependencies
 
 - **Rama**: Distributed computing platform (primary runtime)
-- **LangChain4j**: AI model integration and tool calling
+- **Native model integrations**: provider-neutral ChatProvider protocol (com.rpl.agent-o-rama.model*) for AI model access and tool calling
 - **Shadow-CLJS**: ClojureScript compilation and development
 - **React/UIX**: Frontend UI framework
 - **Transit**: Data serialization between Clojure/ClojureScript
@@ -130,21 +130,19 @@ npx playwright test
   (store/put! store key value))
 ```
 
-### LangChain4j Integration
+### Model Integration
 ```clojure
 ; Declare OpenAI model
-(aor/declare-agent-object-builder
+(openai/declare-model
   topology
   "openai-model"
-  (fn [setup]
-    (-> (OpenAiChatModel/builder)
-        (.apiKey api-key)
-        (.modelName "gpt-4o-mini")
-        .build)))
+  {:api-key-env "OPENAI_API_KEY"
+   :model       "gpt-5.1"
+   :reasoning   {:effort :medium}})
 
 ; Use in agent node
-(let [model (aor/get-agent-object agent-node "openai-model")
-      response (lc4j/chat model (lc4j/chat-request messages options))]
+(let [m (aor/get-agent-object agent-node "openai-model")
+      {:keys [message text tool-calls]} (model/chat m {:messages messages})]
   ; Process response
   )
 ```

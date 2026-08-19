@@ -4,77 +4,68 @@
   (:require
    [clojure.string :as str]
    [com.rpl.agent-o-rama :as aor]
-   [com.rpl.agent-o-rama.langchain4j :as lc4j]
-   [com.rpl.agent-o-rama.langchain4j.json :as lj]
+   [com.rpl.agent-o-rama.model :as model]
+   [com.rpl.agent-o-rama.model.openai :as openai]
+   [com.rpl.agent-o-rama.schema :as schema]
    [com.rpl.agent-o-rama.tools :as tools]
    [com.rpl.rama :as rama]
-   [com.rpl.rama.test :as rtest])
+   [com.rpl.rama.test :as rtest]
+   [jsonista.core :as json])
   (:import
-   [dev.langchain4j.data.document
-    Document]
-   [dev.langchain4j.model.openai
-    OpenAiChatModel]
-   [dev.langchain4j.web.search
-    WebSearchRequest]
-   [dev.langchain4j.web.search.tavily
-    TavilyWebSearchEngine]))
+   [java.net URI]
+   [java.net.http
+    HttpClient
+    HttpRequest
+    HttpRequest$BodyPublishers
+    HttpResponse$BodyHandlers]))
 
-(defn- tavily-web-search-engine
-  [api-key]
-  (-> (TavilyWebSearchEngine/builder)
-      (.apiKey api-key)
-      (.excludeDomains ["en.wikipedia.org"])
-      .build))
-
-(defn- mk-tavily-search
-  [{:keys [max-results] :or {max-results 3}}]
-  (fn [agent-node _ arguments]
-    (let [terms          (get arguments "terms")
-          tavily         (aor/get-agent-object agent-node "tavily")
-          search-results (WebSearchRequest/from terms (int max-results))]
-      (str/join
-       "\n---\n"
-       (mapv
-        (fn [^Document doc] (.text doc))
-        (.toDocuments
-         (.search ^TavilyWebSearchEngine tavily search-results)))))))
+(defn- tavily-search
+  "Performs a Tavily web search and returns the result contents joined
+  with separators."
+  [api-key terms max-results]
+  (let [body     (json/write-value-as-string
+                  {"api_key"         api-key
+                   "query"           terms
+                   "max_results"     max-results
+                   "exclude_domains" ["en.wikipedia.org"]})
+        request  (-> (HttpRequest/newBuilder)
+                     (.uri (URI/create "https://api.tavily.com/search"))
+                     (.header "Content-Type" "application/json")
+                     (.POST (HttpRequest$BodyPublishers/ofString body))
+                     .build)
+        client   (HttpClient/newHttpClient)
+        response (.send client request (HttpResponse$BodyHandlers/ofString))
+        parsed   (json/read-value (.body response))]
+    (str/join
+     "\n---\n"
+     (mapv #(get % "content") (get parsed "results")))))
 
 (def ^:private TOOLS
   "Description of available tools"
-  [(tools/tool-info
-    (tools/tool-specification
-     "tavily"
-     (lj/object
-      {:description "Map containing the terms to search for"
-       :required    ["terms"]}
-      {"terms" (lj/string "The terms to search for")})
-     "Search the web")
-    (mk-tavily-search {:max-results 3})
+  [(tools/tool
+    {:name        "tavily"
+     :description "Search the web"
+     :schema      (schema/object
+                   {:description "Map containing the terms to search for"
+                    :required    ["terms"]}
+                   {"terms" (schema/string "The terms to search for")})}
+    (fn [agent-node _ arguments]
+      (let [terms   (get arguments "terms")
+            api-key (aor/get-agent-object agent-node "tavily-api-key")]
+        (tavily-search api-key terms 3)))
     {:include-context? true})])
 
 (aor/defagentmodule ReActModule
   [topology]
   (aor/declare-agent-object
    topology
-   "openai-api-key"
-   (System/getenv "OPENAI_API_KEY"))
-  (aor/declare-agent-object
-   topology
    "tavily-api-key"
    (System/getenv "TAVILY_API_KEY"))
-  (aor/declare-agent-object-builder
+  (openai/declare-model
    topology
    "openai"
-   (fn [setup]
-     (-> (OpenAiChatModel/builder)
-         (.apiKey (aor/get-agent-object setup "openai-api-key"))
-         (.modelName "gpt-4o-mini")
-         .build)))
-  (aor/declare-agent-object-builder
-   topology
-   "tavily"
-   (fn [setup]
-     (tavily-web-search-engine (aor/get-agent-object setup "tavily-api-key"))))
+   {:api-key-env "OPENAI_API_KEY"
+    :model       "gpt-5-mini"})
   (tools/new-tools-agent topology "tools" TOOLS)
   (->
     topology
@@ -83,16 +74,15 @@
      "chat"
      "chat"
      (fn [agent-node messages]
-       (let [openai     (aor/get-agent-object agent-node "openai")
-             tools      (aor/agent-client agent-node "tools")
-             response   (lc4j/chat openai (lc4j/chat-request messages {:tools TOOLS}))
-             ai-message (.aiMessage response)
-             tool-calls (vec (.toolExecutionRequests ai-message))]
-         (if (not-empty tool-calls)
+       (let [openai (aor/get-agent-object agent-node "openai")
+             tools  (aor/agent-client agent-node "tools")
+             {:keys [message tool-calls text]}
+             (model/chat openai {:messages messages :tools TOOLS})]
+         (if (seq tool-calls)
            (let [tool-results  (aor/agent-invoke tools tool-calls)
-                 next-messages (into (conj messages ai-message) tool-results)]
+                 next-messages (into (conj messages message) tool-results)]
              (aor/emit! agent-node "chat" next-messages))
-           (aor/result! agent-node (.text ai-message))))))))
+           (aor/result! agent-node text)))))))
 
 (defn run-agent
   []
@@ -105,5 +95,5 @@
           _ (print "Ask your question (agent has web search access): ")
           _ (flush)
           ^String user-input (read-line)
-          result        (aor/agent-invoke agent [user-input])]
+          result        (aor/agent-invoke agent [(model/user user-input)])]
       (println result))))

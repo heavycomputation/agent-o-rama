@@ -21,10 +21,7 @@
              "--enable-native-access=ALL-UNNAMED"]
   :dependencies [[com.rpl/rama-helpers "0.10.0" :exclusions [org.clojure/clojure]]
                  [com.github.f4b6a3/uuid-creator "6.1.1"]
-                 [dev.langchain4j/langchain4j
-                  "1.18.1"
-                  :exclusions
-                  [org.slf4j/slf4j-api]]
+                 [metosin/jsonista "0.3.13"]
                  [com.networknt/json-schema-validator
                   "1.5.8"
                   :exclusions
@@ -68,9 +65,6 @@
                                               "-Xmx6g"]
                           :dependencies
                           [[meander/epsilon "0.0.650"]
-                           [dev.langchain4j/langchain4j-open-ai "1.18.1"]
-                           [dev.langchain4j/langchain4j-web-search-engine-tavily
-                            "1.8.0-beta15"]
                            [thheller/shadow-cljs "3.1.7"]
                            [etaoin "1.1.43"]
                            [com.blockether/spel "0.7.11"]
@@ -106,8 +100,6 @@
           :metadata     {:doc/format :markdown}
           :output-path  "target/doc"
           :namespaces   [com.rpl.agent-o-rama
-                         com.rpl.agent-o-rama.langchain4j
-                         com.rpl.agent-o-rama.langchain4j.json
                          com.rpl.agent-o-rama.model
                          com.rpl.agent-o-rama.model.anthropic
                          com.rpl.agent-o-rama.model.openai

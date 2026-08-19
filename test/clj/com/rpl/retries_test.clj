@@ -15,7 +15,7 @@
    [com.rpl.agent-o-rama.impl.retries :as retries]
    [com.rpl.agent-o-rama.impl.topology :as at]
    [com.rpl.agent-o-rama.impl.types :as aor-types]
-   [com.rpl.agent-o-rama.langchain4j :as lc4j]
+   [com.rpl.agent-o-rama.model :as model]
    [com.rpl.agent-o-rama.store :as store]
    [com.rpl.rama.aggs :as aggs]
    [com.rpl.rama.ops :as ops]
@@ -29,18 +29,6 @@
     AgentNodeExecutorTaskGlobal]
    [com.rpl.rama.helpers
     TopologyUtils]
-   [dev.langchain4j.data.message
-    AiMessage]
-   [dev.langchain4j.model.chat.response
-    ChatResponse$Builder]
-   [dev.langchain4j.model.chat
-    ChatModel
-    StreamingChatModel]
-   [dev.langchain4j.model.chat.response
-    ChatResponse]
-   [dev.langchain4j.model.output
-    FinishReason
-    TokenUsage]
    [java.util.concurrent
     CompletableFuture]))
 
@@ -1192,31 +1180,36 @@
 
 (def VAL-ATOM)
 
-(defrecord MockChatModel []
-  ChatModel
-  (doChat [this request]
+(defrecord MockChatProvider []
+  model/ChatProvider
+  (-provider-info [this] {:provider :mock :model "aor-model"})
+  (-chat [this request]
     (let [v (swap! VAL-ATOM dec)]
       (if (even? v)
-        (-> (ChatResponse$Builder.)
-            (.aiMessage (AiMessage. "!!!"))
-            (.finishReason FinishReason/STOP)
-            (.modelName "aor-model")
-            (.tokenUsage (TokenUsage. (int 10) (int 20)))
-            .build)
-        (throw (ex-info "intentional" {:v v}))))))
+        {:message       {:role :assistant :content "!!!"}
+         :text          "!!!"
+         :finish-reason :stop
+         :model         "aor-model"
+         :usage         {:input-tokens 10 :output-tokens 20 :total-tokens 30}}
+        (throw (ex-info "intentional" {:v v})))))
+  (-stream-chat [this request _on-delta]
+    (model/-chat this request)))
 
-(defrecord MockStreamingChatModel []
-  StreamingChatModel
-  (doChat [this request handler]
-    (let [response (-> (ChatResponse$Builder.)
-                       (.aiMessage (AiMessage. "!!!"))
-                       (.finishReason FinishReason/LENGTH)
-                       (.modelName "s-aor-model")
-                       (.tokenUsage (TokenUsage. (int 10) (int 20)))
-                       .build)
-          v        @VAL-ATOM]
+(defrecord MockStreamingChatProvider []
+  model/ChatProvider
+  (-provider-info [this] {:provider :mock :model "s-aor-model" :stream? true})
+  (-chat [this request]
+    (model/-stream-chat this request (fn [_])))
+  (-stream-chat [this request on-delta]
+    (let [v @VAL-ATOM]
       (if (or (odd? v) (= 0 v))
-        (.onCompleteResponse handler response)
+        (do
+          (on-delta "!!!")
+          {:message       {:role :assistant :content "!!!"}
+           :text          "!!!"
+           :finish-reason :length
+           :model         "s-aor-model"
+           :usage         {:input-tokens 10 :output-tokens 20 :total-tokens 30}})
         (throw (ex-info "intentional" {:v v}))
       ))))
 
@@ -1235,11 +1228,11 @@
           (aor/declare-agent-object-builder
            topology
            "chat1"
-           (fn [setup] (->MockChatModel)))
+           (fn [setup] (->MockChatProvider)))
           (aor/declare-agent-object-builder
            topology
            "schat1"
-           (fn [setup] (->MockStreamingChatModel)))
+           (fn [setup] (->MockStreamingChatProvider)))
           (->
             topology
             (aor/new-agent "foo")
@@ -1256,8 +1249,8 @@
                   11
                   {"abc" 123})
                  (h/acquire-semaphore SEM)
-                 (lc4j/basic-chat chat "prompt")
-                 (lc4j/basic-chat schat "prompt")
+                 (model/chat chat "prompt")
+                 (model/chat schat "prompt")
                  (aor/result! agent-node "done")
                ))))
          ))
@@ -1389,6 +1382,7 @@
                  "inputTokenCount"  10
                  "finishReason"     "stop"
                  "objectName"       "chat1"
+                 "provider"         "mock"
                  "input"
                  [{"type" "user" "contents" [{"type" "text" "text" "prompt"}]}]
                  "response"         "!!!"
@@ -1426,6 +1420,7 @@
                  "inputTokenCount"  10
                  "finishReason"     "stop"
                  "objectName"       "chat1"
+                 "provider"         "mock"
                  "input"
                  [{"type" "user" "contents" [{"type" "text" "text" "prompt"}]}]
                  "response"         "!!!"
@@ -1439,6 +1434,7 @@
                  "inputTokenCount"      10
                  "finishReason"         "length"
                  "objectName"           "schat1"
+                 "provider"             "mock"
                  "firstTokenTimeMillis" 0
                  "input"
                  [{"type" "user" "contents" [{"type" "text" "text" "prompt"}]}]

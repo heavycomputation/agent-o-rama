@@ -1,5 +1,6 @@
 (ns com.rpl.agent-o-rama.ui.components.conversation
-  "Components and utilities for displaying LangChain4j conversation data"
+  "Components and utilities for displaying conversation data (neutral
+  message maps: {:role :system|:user|:assistant|:tool :content ...})"
   (:require
    [re-frame.core :as rf]
    [clojure.string :as str]
@@ -11,95 +12,95 @@
   (or (get m k)
       (get m (keyword k))))
 
+(defn- ->name
+  [x]
+  (cond
+    (keyword? x) (name x)
+    (string? x)  x
+    :else        nil))
+
+(def ^:private ROLES #{"system" "user" "assistant" "tool"})
+
 (defn chat-message?
-  "Check if a map represents a LangChain4j chat message.
-  Handles both string and keyword keys."
+  "Check if a map represents a chat message ({:role ... :content ...}).
+  Handles string and keyword keys/values."
   [m]
   (boolean
    (and (map? m)
-        (let [aor-type (get-flexible m "_aor-type")]
-          (and aor-type
-               (string? aor-type)
-               (or (str/includes? aor-type "SystemMessage")
-                   (str/includes? aor-type "UserMessage")
-                   (str/includes? aor-type "AiMessage")
-                   (str/includes? aor-type "ToolExecutionResultMessage")))))))
+        (contains? ROLES (->name (get-flexible m "role"))))))
 
 (defn conversation?
   "Check if data is a conversation (vector of chat messages and/or strings).
-  At least one element must be a LangChain4j chat message.
-  All elements must be either strings or LangChain4j chat messages."
+  At least one element must be a chat message; all elements must be either
+  strings or chat messages."
   [data]
   (boolean
-  (and (sequential? data)
-       (seq data)
-       ;; At least one element must be a chat message
-       (some chat-message? data)
-       ;; All elements must be either strings or chat messages
-       (every? #(or (string? %) (chat-message? %)) data))))
+   (and (sequential? data)
+        (seq data)
+        (some chat-message? data)
+        (every? #(or (string? %) (chat-message? %)) data))))
+
+(defn- block-text
+  "Render a single content block as display text."
+  [block]
+  (case (->name (get-flexible block "type"))
+    "text"      (get-flexible block "text")
+    "reasoning" (let [summary (get-flexible block "summary")]
+                  (str "💭 Reasoning"
+                       (when-not (str/blank? summary)
+                         (str ": " summary))))
+    "tool-call" (str "🔧 Tool call: " (get-flexible block "name")
+                     (when-let [args (get-flexible block "args")]
+                       (str "\nArguments: " (js/JSON.stringify
+                                             (clj->js args))))
+                     (when-let [id (get-flexible block "id")]
+                       (str "\nID: " id)))
+    nil))
+
+(defn- content-text
+  "Render message content (a string or a vector of blocks) as display text."
+  [content separator]
+  (cond
+    (string? content)     content
+    (sequential? content) (->> content
+                               (map block-text)
+                               (filter some?)
+                               (str/join separator))
+    :else                 nil))
 
 (defn extract-message-role-and-text
   "Extract role and text from a chat message or string.
-  Returns a map with :role and :text keys.
-
-  Optional separator parameter controls how contents arrays are
-  joined (default: newline).  Handles both string and keyword keys."
+  Returns a map with :role (\"system\"/\"user\"/\"assistant\"/\"tool\") and
+  :text keys. Optional separator controls how content blocks are joined
+  (default: newline)."
   ([msg] (extract-message-role-and-text msg "\n"))
   ([msg separator]
    (if (string? msg)
-     ;; If it's a string, treat it as a UserMessage
-     {:role "UserMessage"
+     {:role "user"
       :text msg}
-     ;; Otherwise, process as a chat message map
-     (let [msg-type (get-flexible msg "_aor-type")
-           role (when msg-type (last (str/split msg-type #"\.")))
-           text (or (get-flexible msg "text")
-                    (when-let [contents (get-flexible msg "contents")]
-                      (if (sequential? contents)
-                        (->> contents
-                             (map #(get-flexible % "text"))
-                             (filter some?)
-                             (str/join separator))
-                        (get-flexible contents "text"))))]
-
-       (cond
-         ;; If it's a ToolExecutionResultMessage, include tool name and ID
-         (= role "ToolExecutionResultMessage")
-         (let [tool-name (get-flexible msg "toolName")
-               tool-id (get-flexible msg "id")
-               result-text (or text "")
-               formatted-text (str (when tool-name (str "🔧 " tool-name " result"))
-                                   (when (and tool-name tool-id) (str " (ID: " tool-id ")"))
-                                   (when (and (or tool-name tool-id) (not (str/blank? result-text)))
-                                     (str "\n" result-text))
-                                   (when (and (not tool-name) (not tool-id))
-                                     result-text))]
+     (let [role (->name (get-flexible msg "role"))
+           text (content-text (get-flexible msg "content") separator)]
+       (if (= "tool" role)
+         (let [tool-name (->name (get-flexible msg "name"))
+               tool-id   (get-flexible msg "tool-call-id")
+               result    (or text "")]
            {:role role
-            :text formatted-text})
-
-         ;; If no text but has tool execution requests (AiMessage with tool calls)
-         (and (str/blank? text)
-              (get-flexible msg "toolExecutionRequests"))
-         (let [tool-requests (get-flexible msg "toolExecutionRequests")
-               formatted-requests
-               (if (sequential? tool-requests)
-                 (->> tool-requests
-                      (map (fn [req]
-                             (let [tool-name (get-flexible req "name")
-                                   tool-args (get-flexible req "arguments")
-                                   tool-id (get-flexible req "id")]
-                               (str "🔧 Tool call: " tool-name
-                                    (when tool-args (str "\nArguments: " tool-args))
-                                    (when tool-id (str "\nID: " tool-id))))))
-                      (str/join "\n\n"))
-                 "")]
-           {:role role
-            :text formatted-requests})
-
-         ;; Default case
-         :else
+            :text (str (when tool-name (str "🔧 " tool-name " result"))
+                       (when (and tool-name tool-id)
+                         (str " (ID: " tool-id ")"))
+                       (when (and (or tool-name tool-id)
+                                  (not (str/blank? result)))
+                         (str "\n" result))
+                       (when (and (not tool-name) (not tool-id))
+                         result))})
          {:role role
           :text text})))))
+
+(def ^:private ROLE-LABELS
+  {"system"    "SYSTEM"
+   "user"      "USER"
+   "assistant" "AI"
+   "tool"      "TOOL"})
 
 (defn conversation-preview-text
   "Generate preview text for a conversation.
@@ -111,12 +112,7 @@
              (mapv (fn [msg]
                      (let [{:keys [role text]} (extract-message-role-and-text
                                                 msg " ")
-                           label (case role
-                                   "SystemMessage" "SYSTEM"
-                                   "UserMessage" "USER"
-                                   "AiMessage" "AI"
-                                   "ToolExecutionResultMessage" "TOOL"
-                                   (or role "MSG"))
+                           label (get ROLE-LABELS role (or role "MSG"))
                            display-text (if (str/blank? text)
                                           "(empty)"
                                           text)]
@@ -133,10 +129,10 @@
        (let [{:keys [role text]} (extract-message-role-and-text msg)
              [bg-class text-class label]
              (case role
-               "SystemMessage" ["bg-gray-100" "text-gray-700" "SYSTEM"]
-               "UserMessage" ["bg-blue-50" "text-blue-900" "USER"]
-               "AiMessage" ["bg-green-50" "text-green-900" "AI"]
-               "ToolExecutionResultMessage" ["bg-purple-50" "text-purple-900" "TOOL RESULT"]
+               "system"    ["bg-gray-100" "text-gray-700" "SYSTEM"]
+               "user"      ["bg-blue-50" "text-blue-900" "USER"]
+               "assistant" ["bg-green-50" "text-green-900" "AI"]
+               "tool"      ["bg-purple-50" "text-purple-900" "TOOL RESULT"]
                ["bg-gray-50" "text-gray-800" (or role "MESSAGE")])]
          ($ :div
             {:key idx

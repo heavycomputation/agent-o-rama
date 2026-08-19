@@ -1,5 +1,8 @@
 # Agent-o-rama
 
+> **Fork notice**: This is a fork of [redplanetlabs/agent-o-rama](https://github.com/redplanetlabs/agent-o-rama) that removes the LangChain4j integration entirely in favor of native, first-class LLM provider integrations (OpenAI Responses API, Anthropic Messages API, xAI) built on a provider-neutral `ChatProvider` protocol. Messages, tool definitions, and schemas are plain Clojure data. See the `com.rpl.agent-o-rama.model*`, `com.rpl.agent-o-rama.schema`, and `com.rpl.agent-o-rama.tools` namespaces. The Java examples have been removed; the Clojure API is the primary interface.
+
+
 Agent-o-rama is an end-to-end LLM agent platform for building, tracing, testing, and monitoring agents with integrated storage and one-click deployment. Agent-o-rama provides two first-class APIs, one for Java and one for Clojure, with feature parity between them.
 
 Building LLM-based applications requires being rigorous about testing and monitoring. Inspired by [LangGraph](https://www.langchain.com/langgraph) and [LangSmith](https://www.langchain.com/langsmith/observability), Agent-o-rama provides similar capabilities to support the end-to-end workflow of building LLM applications: datasets and experiments for evaluation, and detailed tracing, online evaluation, and time-series telemetry (e.g. model latency, token usage, database latency) for observability. All of this is exposed in a comprehensive web UI.
@@ -43,7 +46,7 @@ LLMs are powerful but inherently unpredictable, so building applications with LL
 
 Agent-o-rama is deployed onto your own infrastructure on a [Rama cluster](https://redplanetlabs.com/). Rama is free to use for clusters up to two nodes and can scale to thousands with a commercial license. Every part of Agent-o-rama is built-in and requires no other dependency besides Rama, including high-performance, durable, and replicated storage of any data model that can be used as part of agents. Agent-o-rama also integrates seamlessly with any other tool, such as databases, vector stores, external APIs, or anything else. Unlike hosted observability tools, all data and traces stay within your infrastructure.
 
-Agent-o-rama integrates with [Langchain4j](https://docs.langchain4j.dev/) to capture detailed traces of model calls and embedding-store operations, and to stream model interactions to clients in real time. Integration is fully optional – if you prefer to use other APIs for model access, Agent-o-rama supports that as well.
+Agent-o-rama ships native integrations for OpenAI (Responses API), Anthropic (Messages API), and xAI, capturing detailed traces of model calls (including reasoning token usage and time-to-first-token) and streaming model output to clients in real time. Any object satisfying the `ChatProvider` protocol gets the same automatic tracing and streaming, so additional providers are a small adapter away — and using other APIs directly is supported as well.
 
 Rama can be downloaded [here](https://redplanetlabs.com/download), and instructions for setting up a cluster are [here](https://redplanetlabs.com/docs/~/operating-rama.html#_setting_up_a_rama_cluster). A cluster can be [as small as one node](https://redplanetlabs.com/docs/~/operating-rama.html#_running_single_node_cluster) or as big as thousands of nodes. There's also one-click deploys [for AWS](https://github.com/redplanetlabs/rama-aws-deploy) and [for Azure](https://github.com/redplanetlabs/rama-azure-deploy). Instructions for developing with and deploying Agent-o-rama [are below](#downloads).
 
@@ -107,59 +110,15 @@ Below is a quick tour of all aspects of Agent-o-rama, starting with defining age
 
 Agents are defined in "modules" which also contain storage definitions, agent objects (such as LLM or database clients), custom [evaluators](https://github.com/redplanetlabs/agent-o-rama/wiki/Datasets,-evaluators,-and-experiments), and custom [actions](https://github.com/redplanetlabs/agent-o-rama/wiki/Actions,-rules,-and-telemetry). A module can have any number of agents in it, and a module is launched on a cluster with one-line commands with the Rama CLI. For example, here's how to define a module `BasicAgentModule` with one agent that does a single LLM call and run it in the "in-process cluster" (IPC) development environment in both Java and Clojure:
 
-#### Java example
-
-```java
-public class BasicAgentModule extends AgentModule {
-  @Override
-  protected void defineAgents(AgentTopology topology) {
-    topology.declareAgentObject("openai-api-key", System.getenv("OPENAI_API_KEY"));
-    topology.declareAgentObjectBuilder(
-      "openai-model",
-      setup -> {
-        String apiKey = setup.getAgentObject("openai-api-key");
-        return OpenAiStreamingChatModel.builder()
-            .apiKey(apiKey)
-            .modelName("gpt-4o-mini")
-            .build();
-      });
-    topology.newAgent("basic-agent")
-            .node("chat",
-                  null,
-                  (AgentNode node, String prompt) -> {
-                    ChatModel model = node.getAgentObject("openai-model");
-                    node.result(model.chat(prompt));
-                  });
-  }
-}
-
-try (InProcessCluster ipc = InProcessCluster.create();
-     AutoCloseable ui = UI.start(ipc)) {
-  BasicAgentModule module = new BasicAgentModule();
-  ipc.launchModule(module, new LaunchConfig(1, 1));
-  String moduleName = module.getModuleName();
-  AgentManager manager = AgentManager.create(ipc, moduleName);
-  AgentClient agent = manager.getAgentClient("basic-agent");
-
-  String result = agent.invoke("What are use cases for AI agents?");
-  System.out.println("Result: " + result);
-}
-```
-
-#### Clojure example
-
 ```clojure
 (aor/defagentmodule BasicAgentModule
   [topology]
-  (aor/declare-agent-object topology "openai-api-key" (System/getenv "OPENAI_API_KEY"))
-  (aor/declare-agent-object-builder
+  (openai/declare-model
    topology
    "openai-model"
-   (fn [setup]
-     (-> (OpenAiStreamingChatModel/builder)
-         (.apiKey (aor/get-agent-object setup "openai-api-key"))
-         (.modelName "gpt-4o-mini")
-         .build)))
+   {:api-key (System/getenv "OPENAI_API_KEY")
+    :model   "gpt-5.1"
+    :stream? true})
   (-> topology
       (aor/new-agent "basic-agent")
       (aor/node
@@ -167,7 +126,7 @@ try (InProcessCluster ipc = InProcessCluster.create();
        nil
        (fn [agent-node prompt]
          (let [openai (aor/get-agent-object agent-node "openai-model")]
-           (aor/result! agent-node (lc4j/basic-chat openai prompt))
+           (aor/result! agent-node (:text (model/chat openai prompt)))
          )))))
 
 (with-open [ipc (rtest/create-ipc)
@@ -182,7 +141,7 @@ try (InProcessCluster ipc = InProcessCluster.create();
 
 These examples also launch the Agent-o-rama UI locally at `http://localhost:1974`.
 
-See [this page](https://github.com/redplanetlabs/agent-o-rama/wiki/Programming-agents) for all the details of coding agents, including having multiple nodes, getting human input as part of execution, and aggregation. For lots of examples of agents in either Java or Clojure, see the [examples](https://github.com/redplanetlabs/agent-o-rama/tree/master/examples) directory in the repository.
+See [this page](https://github.com/redplanetlabs/agent-o-rama/wiki/Programming-agents) for all the details of coding agents, including having multiple nodes, getting human input as part of execution, and aggregation. For lots of examples of agents, see the [examples](examples/clj) directory in the repository.
 
 #### Managing modules on a real cluster
 

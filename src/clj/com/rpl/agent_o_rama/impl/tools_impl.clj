@@ -9,13 +9,7 @@
    [com.rpl.agent-o-rama.impl.types :as aor-types]
    [com.rpl.agent-o-rama.throttled-logging :as tl]
    [com.rpl.rama.ops :as ops]
-   [jsonista.core :as j])
-  (:import
-   [dev.langchain4j.agent.tool
-    ToolExecutionRequest
-    ToolSpecification]
-   [dev.langchain4j.data.message
-    ToolExecutionResultMessage]))
+   [jsonista.core :as j]))
 
 (defn hook:new-tools-agent-options [name options])
 
@@ -36,12 +30,8 @@
 (def MAPPER (j/object-mapper {:decode-key-fn str}))
 
 (defn spec-name
-  "Name of a tool specification — either a langchain4j ToolSpecification or
-  a plain data spec map (com.rpl.agent-o-rama.tools/tool)."
   [tool-specification]
-  (if (map? tool-specification)
-    (:name tool-specification)
-    (.name ^ToolSpecification tool-specification)))
+  (:name tool-specification))
 
 (defn- mk-tools-by-name
   [tools]
@@ -63,36 +53,21 @@
                           keys
                           sort)]
     (fn [agent-node request caller-data]
-      ;; request is either a langchain4j ToolExecutionRequest or a neutral
-      ;; tool-call map {:id ... :name ... :args ...} (a response's :tool-calls
-      ;; entry from com.rpl.agent-o-rama.model/chat); the result emitted is a
-      ;; ToolExecutionResultMessage or a {:role :tool ...} map to match
+      ;; request is a neutral tool-call map {:id ... :name ... :args ...}
+      ;; (a response's :tool-calls entry from com.rpl.agent-o-rama.model/chat);
+      ;; the result emitted is a {:role :tool ...} message
       (let [start-time-millis (h/current-time-millis)
-            native?    (map? request)
-            tool-name  (if native?
-                         (:name request)
-                         (.name ^ToolExecutionRequest request))
-            request-id (if native?
-                         (:id request)
-                         (.id ^ToolExecutionRequest request))
-            args       (if native?
-                         (let [args (:args request)]
-                           (if (string? args)
-                             (j/read-value ^String args MAPPER)
-                             args))
-                         (-> ^ToolExecutionRequest request
-                             .arguments
-                             (j/read-value MAPPER)))
-            mk-result  (if native?
-                         (fn [s]
-                           {:role         :tool
-                            :tool-call-id request-id
-                            :name         tool-name
-                            :content      (str s)})
-                         (fn [s]
-                           (ToolExecutionResultMessage/from
-                            ^ToolExecutionRequest request
-                            (str s))))
+            tool-name  (:name request)
+            request-id (:id request)
+            args       (let [args (:args request)]
+                         (if (string? args)
+                           (j/read-value ^String args MAPPER)
+                           args))
+            mk-result  (fn [s]
+                         {:role         :tool
+                          :tool-call-id request-id
+                          :name         tool-name
+                          :content      (str s)})
             base-info {"id"   request-id
                        "name" tool-name
                        "args" args}]

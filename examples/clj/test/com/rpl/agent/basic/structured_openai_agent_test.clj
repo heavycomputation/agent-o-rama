@@ -1,22 +1,22 @@
-(ns com.rpl.agent.basic.structured-langchain4j-agent-test
+(ns com.rpl.agent.basic.structured-openai-agent-test
   (:require
    [clojure.test :refer [deftest testing is]]
    [com.rpl.agent-o-rama :as aor]
    [com.rpl.rama :as rama]
    [com.rpl.rama.test :as rtest]
-   [com.rpl.agent.basic.structured-langchain4j-agent :refer [StructuredLangChain4jModule]]))
+   [com.rpl.agent.basic.structured-openai-agent :refer [StructuredOpenAIAgentModule]]))
 
-(deftest structured-langchain4j-agent-test
+(deftest structured-openai-agent-test
   (System/gc)
-  (testing "StructuredLangChain4jAgent with real OpenAI model"
+  (testing "StructuredOpenAIAgent with real OpenAI model"
     (if (System/getenv "OPENAI_API_KEY")
       (with-open [ipc (rtest/create-ipc)]
-        (rtest/launch-module! ipc StructuredLangChain4jModule {:tasks 1 :threads 1})
+        (rtest/launch-module! ipc StructuredOpenAIAgentModule {:tasks 1 :threads 1})
 
         (let [manager (aor/agent-manager ipc
                                          (rama/get-module-name
-                                          StructuredLangChain4jModule))
-              agent   (aor/agent-client manager "StructuredLangChain4jAgent")]
+                                          StructuredOpenAIAgentModule))
+              agent   (aor/agent-client manager "StructuredOpenAIAgent")]
 
           (testing "returns structured response with all expected fields"
             (let [result (aor/agent-invoke agent "What is agent-o-rama?")]

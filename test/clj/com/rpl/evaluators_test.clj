@@ -12,7 +12,8 @@
    [com.rpl.agent-o-rama.impl.pobjects :as po]
    [com.rpl.agent-o-rama.impl.queries :as queries]
    [com.rpl.agent-o-rama.impl.types :as aor-types]
-   [com.rpl.agent-o-rama.langchain4j.json :as lj]
+   [com.rpl.agent-o-rama.model :as model]
+   [com.rpl.agent-o-rama.model.openai :as openai]
    [com.rpl.rama.aggs :as aggs]
    [com.rpl.rama.ops :as ops]
    [com.rpl.rama.test :as rtest]
@@ -22,39 +23,22 @@
    [com.rpl.agentorama
     ExampleRun]
    [com.rpl.aortest
-    TestSnippets]
-   [dev.langchain4j.data.message
-    AiMessage
-    SystemMessage
-    ToolExecutionResultMessage
-    UserMessage]
-   [dev.langchain4j.model.chat
-    ChatModel]
-   [dev.langchain4j.model.chat.response
-    ChatResponse$Builder]))
+    TestSnippets]))
 
-(defn schema->json-string
-  "Convert a JsonSchema to its JSON string representation."
-  [schema]
-  (.toString schema))
-
-(defrecord MockChatModel []
-  ChatModel
-  (doChat [this request]
-    (let [^UserMessage m (-> request
-                             .messages
-                             last)]
-      (-> (ChatResponse$Builder.)
-          (.aiMessage (AiMessage. (j/write-value-as-string
-                                   {"temperature"  (.temperature request)
-                                    "message"      (.singleText m)
-                                    "outputSchema" (schema->json-string
-                                                    (-> request
-                                                        .responseFormat
-                                                        .jsonSchema
-                                                        .rootElement))
-                                   })))
-          .build))))
+(defrecord MockChatProvider []
+  model/ChatProvider
+  (-provider-info [this] {:provider :mock :model "mock-1"})
+  (-chat [this request]
+    (let [m (last (:messages request))]
+      {:text          (j/write-value-as-string
+                       {"temperature"  (:temperature request)
+                        "message"      (model/content-text (:content m))
+                        "outputSchema" (j/write-value-as-string
+                                        (get-in request
+                                                [:output-schema :schema]))})
+       :finish-reason :stop}))
+  (-stream-chat [this request _on-delta]
+    (model/-chat this request)))
 
 (deftest evaluator-operations-test
   (with-open [ipc (rtest/create-ipc)]
@@ -65,7 +49,7 @@
         (aor/declare-agent-object-builder
          topology
          "my-model"
-         (fn [setup] (->MockChatModel)))
+         (fn [setup] (->MockChatProvider)))
         (aor/declare-evaluator-builder
          topology
          "concise-10"
@@ -301,18 +285,18 @@
             (aor/try-evaluator manager "aconcise6" nil nil nil)))
      (is
       (= {"concise?" true}
-         (aor/try-evaluator manager "aconcise6" nil nil (AiMessage. "......"))))
+         (aor/try-evaluator manager "aconcise6" nil nil {:role :assistant :content "......"})))
      (is
       (=
        {"concise?" false}
-       (aor/try-evaluator manager "aconcise6" nil nil (AiMessage. "......."))))
+       (aor/try-evaluator manager "aconcise6" nil nil {:role :assistant :content "......."})))
      (is
       (= {"concise?" true}
          (aor/try-evaluator manager
                             "aconcise6"
                             nil
                             nil
-                            (SystemMessage. "......"))))
+                            {:role :system :content "......"})))
      (is
       (=
        {"concise?" false}
@@ -320,7 +304,7 @@
                           "aconcise6"
                           nil
                           nil
-                          (SystemMessage. "......."))))
+                          {:role :system :content "......."})))
      (is
       (= {"concise?" true}
          (aor/try-evaluator
@@ -328,7 +312,7 @@
           "aconcise6"
           nil
           nil
-          (ToolExecutionResultMessage. "id" "name" "......"))))
+          {:role :tool :tool-call-id "id" :name "name" :content "......"})))
      (is
       (=
        {"concise?" false}
@@ -336,11 +320,11 @@
                           "aconcise6"
                           nil
                           nil
-                          (ToolExecutionResultMessage. "id" "name" "......."))))
+                          {:role :tool :tool-call-id "id" :name "name" :content "......."})))
      (is
       (=
        {"concise?" true}
-       (aor/try-evaluator manager "aconcise6" nil nil (UserMessage. "......"))))
+       (aor/try-evaluator manager "aconcise6" nil nil {:role :user :content "......"})))
      (is
       (=
        {"concise?" false}
@@ -348,7 +332,7 @@
                           "aconcise6"
                           nil
                           nil
-                          (UserMessage. "......."))))
+                          {:role :user :content "......."})))
 
 
      (bind os "{\"type\":\"object\",\"properties\":{\"aaa\":{\"type\":\"string\"}},\"required\":[\"aaa\"],\"additionalProperties\":false}")
@@ -371,7 +355,7 @@
                                   "EF")]
        (is (= {"message" "1 AB 2 CD 3 EF 4 AB" "temperature" 1.2}
               (select-keys result ["message" "temperature"])))
-       (let [expected-schema-str (schema->json-string (lj/from-json-string os))]
+       (let [expected-schema-str (j/write-value-as-string (j/read-value os))]
         (is (= expected-schema-str (get result "outputSchema")))))
 
      ;; Verify non-string values are converted to strings in template
@@ -724,14 +708,10 @@
     (with-open [ipc (rtest/create-ipc)]
       (let [module (aor/agentmodule
                     [topology]
-                    (aor/declare-agent-object-builder
+                    (openai/declare-model
                      topology
                      "openai"
-                     (fn [setup]
-                       (-> (dev.langchain4j.model.openai.OpenAiChatModel/builder)
-                           (.apiKey (System/getenv "OPENAI_API_KEY"))
-                           (.modelName "gpt-4o-mini")
-                           .build)))
+                     {:model "gpt-4o-mini"})
                     (-> topology
                         (aor/new-agent "foo")
                         (aor/node

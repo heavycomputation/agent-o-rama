@@ -39,16 +39,15 @@ ObjectBuilders are instantiated on demand, and pooled.
 
 ## Relationships
 - Uses: [agent-topology], [agent-node], [configuration]
-- Used by: [langchain4j-integration], [database-connection], [external-api]
+- Used by: [model-integration], [database-connection], [external-api]
 
 ## Dependency graph edges:
     agent-topology -> agent-objects
     agent-node -> agent-objects
     configuration -> agent-objects
-    agent-objects -> langchain4j-integration
+    agent-objects -> model-integration
     agent-objects -> database-connection
     agent-objects -> external-api
 
 ## Examples
-- Clojure: `examples/clj/src/com/rpl/agent/basic/langchain4j_agent.clj`
-- Java: `examples/java/basic/src/main/java/com/rpl/agent/basic/LangChain4jAgent.java`
+- Clojure: `examples/clj/src/com/rpl/agent/basic/openai_agent.clj`

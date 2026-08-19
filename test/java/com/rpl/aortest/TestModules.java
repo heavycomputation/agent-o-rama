@@ -1,77 +1,63 @@
 package com.rpl.aortest;
 
-import java.util.Arrays;
-
 import com.rpl.agentorama.*;
-import com.rpl.rama.*;
-import com.rpl.rama.test.*;
+import com.rpl.rama.RamaModule;
+import com.rpl.rama.test.InProcessCluster;
+import com.rpl.rama.test.LaunchConfig;
 
-import dev.langchain4j.agent.tool.ToolSpecification;
-import dev.langchain4j.data.message.ToolExecutionResultMessage;
-import dev.langchain4j.data.message.UserMessage;
-import dev.langchain4j.model.chat.ChatModel;
-import dev.langchain4j.model.chat.request.ChatRequest;
-import dev.langchain4j.model.chat.request.json.JsonObjectSchema;
-import dev.langchain4j.model.chat.response.ChatResponse;
-import dev.langchain4j.model.openai.*;
+import clojure.lang.Keyword;
+import clojure.lang.PersistentHashMap;
 
 import java.util.*;
 
 
 public class TestModules {
-  public static class BasicToolsOpenAIAgent extends AgentModule {
+  static Keyword kw(String name) {
+    return Keyword.intern(name);
+  }
+
+  static Map toolCall(String id, String name, String argsJson) {
+    // a Clojure map, so it serializes through depots; args as a JSON string
+    // (the tools agent parses string args, as providers deliver them)
+    return PersistentHashMap.create(kw("id"), id, kw("name"), name, kw("args"), argsJson);
+  }
+
+  static Map<String, Object> intParamsSchema() {
+    return Map.of(
+      "type", "object",
+      "properties", Map.of(
+        "a", Map.of("type", "integer"),
+        "b", Map.of("type", "integer")),
+      "required", List.of("a", "b"));
+  }
+
+  public static class BasicToolsAgent extends AgentModule {
     public static List<ToolInfo> TOOLS = Arrays.asList(
       ToolInfo.create(
-        ToolSpecification.builder()
-                         .name("add")
-                         .parameters(JsonObjectSchema.builder()
-                                                     .addIntegerProperty("a")
-                                                     .addIntegerProperty("b")
-                                                     .build())
-                         .build(),
+        Map.of("name", "add",
+               "description", "Add two integers",
+               "schema", intParamsSchema()),
         (Map<String, Integer> args) -> {
           return "" + (args.get("a") + args.get("b"));
         }),
       ToolInfo.createWithContext(
-        ToolSpecification.builder()
-                         .name("multiply")
-                         .parameters(JsonObjectSchema.builder()
-                                                     .addIntegerProperty("a")
-                                                     .addIntegerProperty("b")
-                                                     .build())
-                         .build(),
+        Map.of("name", "multiply",
+               "description", "Multiply two integers",
+               "schema", intParamsSchema()),
         (AgentNode node, Integer callerData, Map<String, Integer> args) -> {
           return "" + (args.get("a") * args.get("b") + callerData);
         })
       );
 
-    public static void doModelCall(AgentNode node, String k, String prompt) {
-      ChatModel model = node.getAgentObject("openai");
+    public static void doToolCall(AgentNode node, String k, Map request) {
       AgentClient tools = node.getAgentClient("tools");
-      List<ToolSpecification> t = new ArrayList();
-      for(ToolInfo info: TOOLS) {
-        t.add(info.getToolSpecification());
-      }
-      ChatResponse response = model.chat(ChatRequest.builder()
-                                   .toolSpecifications(t)
-                                   .messages(Arrays.asList(new UserMessage(prompt)))
-                                   .build());
-      List requests = response.aiMessage().toolExecutionRequests();
-      if(requests.size() != 1) throw new RuntimeException("failed");
-      List<ToolExecutionResultMessage> results = tools.invoke(requests, 6);
+      List<Map> results = tools.invoke(Arrays.asList(request), 6);
       if(results.size() != 1) throw new RuntimeException("failed");
-      node.emit("agg", k, results.get(0).text());
+      node.emit("agg", k, results.get(0).get(kw("content")));
     }
 
     @Override
     protected void defineAgents(AgentTopology topology) {
-      topology.declareAgentObject("openai-key", System.getenv("OPENAI_API_KEY"));
-      topology.declareAgentObjectBuilder("openai", (AgentObjectSetup setup) -> {
-        return OpenAiChatModel.builder()
-                              .apiKey(setup.getAgentObject("openai-key"))
-                              .modelName("gpt-4o-mini")
-                              .build();
-      });
       topology.newToolsAgent("tools", TOOLS);
       topology.newToolsAgent("tools2", TOOLS, ToolsAgentOptions.errorHandlerStaticString("edcba"));
       topology.newAgent("foo")
@@ -83,16 +69,16 @@ public class TestModules {
                 })
               .aggStartNode(
                 "a",
-                "model",
+                "tool",
                 (AgentNode node) -> {
-                  node.emit("model", "a", "What is five added to three? Use a tool call to answer the question.");
-                  node.emit("model", "m", "What is six multiplied by eight? Use a tool call to answer the question.");
+                  node.emit("tool", "a", toolCall("c1", "add", "{\"a\": 5, \"b\": 3}"));
+                  node.emit("tool", "m", toolCall("c2", "multiply", "{\"a\": 6, \"b\": 8}"));
                   return null;
                 })
               .node(
-                "model",
+                "tool",
                 List.of("agg"),
-                BasicToolsOpenAIAgent::doModelCall)
+                BasicToolsAgent::doToolCall)
               .aggNode(
                 "agg",
                 null,
@@ -103,9 +89,9 @@ public class TestModules {
     }
   }
 
-  public static Map runBasicToolsOpenAIAgent() throws Exception {
+  public static Map runBasicToolsAgent() throws Exception {
     try(InProcessCluster ipc = InProcessCluster.create()) {
-      RamaModule module = new BasicToolsOpenAIAgent();
+      RamaModule module = new BasicToolsAgent();
       ipc.launchModule(module, new LaunchConfig(4, 2));
       AgentManager manager = AgentManager.create(ipc, module.getModuleName());
       AgentClient foo = manager.getAgentClient("foo");

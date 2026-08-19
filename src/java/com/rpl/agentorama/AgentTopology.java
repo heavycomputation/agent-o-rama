@@ -29,13 +29,10 @@ import java.util.*;
  *     topology.declareKeyValueStore("$$myStore", String.class, Integer.class);
  *
  *     topology.declareAgentObject("openai-api-key", "sk-...");
- *     topology.declareAgentObjectBuilder("openai-model", setup -> {
- *       String apiKey = setup.getAgentObject("openai-api-key");
- *       return OpenAiChatModel.builder()
- *         .apiKey(apiKey)
- *         .modelName("gpt-4o-mini")
- *         .build();
- *     });
+ *     // model objects are typically declared from Clojure via
+ *     // com.rpl.agent-o-rama.model.openai/declare-model (see the model
+ *     // namespaces); any object satisfying the ChatProvider protocol is
+ *     // auto-traced
  *
  *     // Create agents using builder pattern
  *     topology.newAgent("my-agent")
@@ -45,8 +42,8 @@ import java.util.*;
  *         agentNode.emit("process", "Hello " + input);
  *       })
  *       .node("process", (AgentNode agentNode, String input) -> {
- *         OpenAiChatModel model = agentNode.getAgentObject("openai-model");
- *         agentNode.result(model.chat(input));
+ *         Object model = agentNode.getAgentObject("openai-model");
+ *         agentNode.result(process(model, input));
  *       });
  *   }
  * }

@@ -40,7 +40,7 @@ public interface AgentObjectOptions {
 
   /**
    * Creates options with auto-tracing disabled. When auto-tracing is enabled, chat models and
-   * embedding stores from Langchain4j are automatically wrapped to record all calls as nested operations.
+   * objects satisfying the ChatProvider protocol are automatically wrapped to record all calls as nested operations.
    * 
    * @return options with auto-tracing disabled
    */
@@ -81,7 +81,7 @@ public interface AgentObjectOptions {
 
     /**
      * Creates options with auto-tracing disabled. When auto-tracing is enabled, chat models and
-     * embedding stores from Langchain4j are automatically wrapped to record all calls as nested operations.
+     * objects satisfying the ChatProvider protocol are automatically wrapped to record all calls as nested operations.
      * 
      * @return options with auto-tracing disabled
      */

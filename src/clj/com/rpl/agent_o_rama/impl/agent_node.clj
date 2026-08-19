@@ -5,7 +5,6 @@
    [clojure.tools.logging :as cljlogging]
    [com.rpl.agent-o-rama.impl.client :as iclient]
    [com.rpl.agent-o-rama.impl.helpers :as h]
-   [com.rpl.agent-o-rama.impl.langchain4j-trace :as lc4j-trace]
    [com.rpl.agent-o-rama.impl.model-trace :as model-trace]
    [com.rpl.agent-o-rama.impl.partitioner :as apart]
    [com.rpl.agent-o-rama.model :as model]
@@ -32,25 +31,6 @@
     AckLevel
     Depot
     QueryTopologyClient]
-   [dev.langchain4j.model.chat
-    ChatModel
-    StreamingChatModel]
-   [dev.langchain4j.data.embedding
-    Embedding]
-   [dev.langchain4j.data.segment
-    TextSegment]
-   [dev.langchain4j.data.message
-    ChatMessage]
-   [dev.langchain4j.model.chat.request
-    ChatRequest]
-   [dev.langchain4j.model.chat.response
-    ChatResponse
-    StreamingChatResponseHandler]
-   [dev.langchain4j.store.embedding
-    EmbeddingMatch
-    EmbeddingStore]
-   [dev.langchain4j.store.embedding.filter
-    Filter]
    [java.io
     Closeable]
    [java.util
@@ -676,99 +656,6 @@
   (when (instance? Closeable obj)
     (close! obj)))
 
-(defn- record-model-call!
-  [name agent-node ^ChatRequest request ^ChatResponse response start-time-millis
-   first-token-time-millis]
-  (record-nested-op!-impl
-   agent-node
-   :model-call
-   start-time-millis
-   (h/current-time-millis)
-   (h/remove-empty-vals
-    {"objectName"       name
-     "modelName"        (.modelName response)
-     "frequencyPenalty" (.frequencyPenalty request)
-     "presencePenalty"  (.presencePenalty request)
-     "stopSequences"    (into [] (.stopSequences request))
-     "temperature"      (.temperature request)
-     "topK"             (.topK request)
-     "topP"             (.topP request)
-     "input"            (lc4j-trace/messages->trace (.messages request))
-     "response"         (h/safe-> response .aiMessage .text)
-     "toolRequests"     (mapv lc4j-trace/tool-request->trace
-                            (h/safe-> response .aiMessage .toolExecutionRequests))
-     "finishReason"     (lc4j-trace/finish-reason->trace
-                         (.finishReason response))
-     "inputTokenCount"  (h/safe-> response
-                                  .tokenUsage
-                                  .inputTokenCount)
-     "outputTokenCount" (h/safe-> response
-                                  .tokenUsage
-                                  .outputTokenCount)
-     "totalTokenCount"  (h/safe-> response
-                                  .tokenUsage
-                                  .totalTokenCount)
-     "firstTokenTimeMillis" first-token-time-millis
-    })))
-
-(defn record-model-failure!
-  [name agent-node ^ChatRequest request start-time-millis t]
-  (record-nested-op!-impl
-   agent-node
-   :model-call
-   start-time-millis
-   (h/current-time-millis)
-   {"objectName" name
-    "input"      (lc4j-trace/messages->trace (.messages request))
-    "failure"    (h/throwable->str t)}))
-
-(defn- instrument-chat!
-  [name request response-fn]
-  (let [^AgentNode agent-node (h/thread-local-get AGENT-NODE-CONTEXT)
-        start-time-millis     (h/current-time-millis)]
-    (try
-      (let [response (response-fn)]
-        (record-model-call! name agent-node request response start-time-millis nil)
-        response)
-      (catch Throwable t
-        (record-model-failure! name agent-node request start-time-millis t)
-        (throw t)))))
-
-(defn- instrument-streaming-chat!
-  [name ^ChatRequest request initiate-fn]
-  (let [^AgentNode agent-node (h/thread-local-get AGENT-NODE-CONTEXT)
-        start-time-millis     (h/current-time-millis)]
-    (try
-      (let [cf (CompletableFuture.)
-            first-token-time-millis (atom nil)
-            update-token-time!
-            (fn [] (swap! first-token-time-millis (fn [v] (or v (h/current-time-millis)))))
-            _ (initiate-fn
-               (reify
-                StreamingChatResponseHandler
-                (onPartialResponse [this partial]
-                  (update-token-time!)
-                  (.streamChunk agent-node partial))
-                (onCompleteResponse [this response]
-                  (update-token-time!)
-                  (.complete cf response))
-                (onError [this t]
-                  (.completeExceptionally
-                   cf
-                   (h/ex-info "Streaming failed" {:name name} t)))))
-            response (.get cf)]
-        (record-model-call! name
-                            agent-node
-                            request
-                            response
-                            start-time-millis
-                            @first-token-time-millis)
-        response)
-      (catch Throwable t
-        (record-model-failure! name agent-node request start-time-millis t)
-        (throw t))
-    )))
-
 (defn- record-provider-call!
   [name info agent-node request response start-time-millis
    first-token-time-millis]
@@ -848,22 +735,6 @@
         (record-provider-failure! name agent-node request start-time-millis t)
         (throw t)))))
 
-(defmacro with-traced
-  [expr object-name nested-op-type [res-sym] & body]
-  `(let [agent-node#        (h/thread-local-get AGENT-NODE-CONTEXT)
-         start-time-millis# (h/current-time-millis)
-         ~res-sym           ~expr
-         info-map#          (do ~@body)
-        ]
-     (record-nested-op!-impl
-      agent-node#
-      ~nested-op-type
-      start-time-millis#
-      (h/current-time-millis)
-      (assoc info-map# "objectName" ~object-name))
-     ~res-sym
-   ))
-
 (defn wrap-agent-object
   [name obj]
   (cond
@@ -879,183 +750,6 @@
          (instrument-provider-stream-chat! name info obj request on-delta))
        (-provider-info [this]
          (model/-provider-info obj))
-
-       IUnderlying
-       (getUnderlying [this] obj)
-
-       Closeable
-       (close [this] (try-close! obj))))
-
-    (instance? ChatModel obj)
-    (let [^ChatModel obj obj]
-      (reify
-       ChatModel
-       ;; - each provider overrides one of the following two methods and uses
-       ;; default impls for the rest of the "chat" methods
-       (^ChatResponse chat [this ^ChatRequest chatRequest]
-         (instrument-chat! name chatRequest #(.chat obj chatRequest)))
-       (^ChatResponse doChat [this ^ChatRequest chatRequest]
-         (instrument-chat! name chatRequest #(.doChat obj chatRequest)))
-       (defaultRequestParameters [this] (.defaultRequestParameters obj))
-       (listeners [this] (.listeners obj))
-       (provider [this] (.provider obj))
-       (supportedCapabilities [this] (.supportedCapabilities obj))
-
-       IUnderlying
-       (getUnderlying [this] obj)
-
-       Closeable
-       (close [this] (try-close! obj))))
-
-
-    (instance? StreamingChatModel obj)
-    (let [^StreamingChatModel obj obj]
-      (reify
-       ChatModel
-       ;; - same as with ChatModel impls, some StreamingChatModel impls
-       ;; implement chat(ChatRequest, StreamingChatResponseHandler) and others
-       ;; implement doChat(ChatRequest, StreamingChatResponseHandler)
-       ;; - so here only need to implement these entry points and forward to
-       ;; corresponding method on StreamingChatModel
-       (^ChatResponse chat [this ^ChatRequest chatRequest]
-         (instrument-streaming-chat!
-          name
-          chatRequest
-          #(.chat obj chatRequest ^StreamingChatResponseHandler %)))
-       (^ChatResponse doChat [this ^ChatRequest chatRequest]
-         (instrument-streaming-chat!
-          name
-          chatRequest
-          #(.doChat obj chatRequest ^StreamingChatResponseHandler %)))
-       (defaultRequestParameters [this] (.defaultRequestParameters obj))
-       (listeners [this] (.listeners obj))
-       (provider [this] (.provider obj))
-       (supportedCapabilities [this] (.supportedCapabilities obj))
-
-       IUnderlying
-       (getUnderlying [this] obj)
-
-       Closeable
-       (close [this] (try-close! obj))))
-
-    (instance? EmbeddingStore obj)
-    (let [^EmbeddingStore obj obj]
-      (reify
-       EmbeddingStore
-       (add [this embedding]
-         (with-traced
-          (.add obj embedding)
-          name
-          :db-write
-          [res]
-          {"op" "add"
-           "id" res
-          }))
-       (^String add [this ^Embedding embedding ^Object embedded]
-         (with-traced
-          (.add obj embedding embedded)
-          name
-          :db-write
-          [res]
-          {"op" "add"
-           "id" res
-          }))
-       (^void add [this ^String id ^Embedding embedding]
-         (with-traced
-          (.add obj id embedding)
-          name
-          :db-write
-          [res]
-          {"op" "add"
-           "id" id
-          }))
-       (addAll [this embeddings]
-         (with-traced
-          (.addAll obj embeddings)
-          name
-          :db-write
-          [res]
-          {"op"  "addAll"
-           "ids" res
-          }))
-       (addAll [this embeddings embeddeds]
-         (with-traced
-          (.addAll obj embeddings embeddeds)
-          name
-          :db-write
-          [res]
-          {"op"  "addAll"
-           "ids" res
-          }))
-       (addAll [this ids embeddings embeddeds]
-         (with-traced
-          (.addAll obj ids embeddings embeddeds)
-          name
-          :db-write
-          [res]
-          {"op"  "addAll"
-           "ids" ids
-          }))
-       (generateIds [this n]
-         (.generateIds obj n))
-       (remove [this id]
-         (with-traced
-          (.remove obj id)
-          name
-          :db-write
-          [res]
-          {"op" "remove"
-           "id" id
-          }))
-       (removeAll [this]
-         (with-traced
-          (.removeAll obj)
-          name
-          :db-write
-          [res]
-          {"op" "removeAll"
-          }))
-       (^void removeAll [this ^Filter filter]
-         (with-traced
-          (.removeAll obj filter)
-          name
-          :db-write
-          [res]
-          {"op"     "removeAll"
-           "filter" (str filter)
-          }))
-       (^void removeAll [this ^java.util.Collection ids]
-         (with-traced
-          (.removeAll obj ids)
-          name
-          :db-write
-          [res]
-          {"op"  "removeAll"
-           "ids" ids
-          }))
-       (search [this request]
-         (with-traced
-          (.search obj request)
-          name
-          :db-read
-          [res]
-          {"op"      "search"
-           "request" {"filter"     (str (.filter request))
-                      "maxResults" (.maxResults request)
-                      "minScore"   (.minScore request)}
-           "matches" (mapv
-                      (fn [^EmbeddingMatch match]
-                        (let [embedded (.embedded match)
-                              base-map {"id"    (.embeddingId match)
-                                        "score" (.score match)}]
-                          (if (instance? TextSegment embedded)
-                            (let [metadata (.metadata ^TextSegment embedded)]
-                              (if metadata
-                                (assoc base-map "metadata" (into {} (.toMap metadata)))
-                                base-map))
-                            base-map)))
-                      (.matches res))
-          }))
 
        IUnderlying
        (getUnderlying [this] obj)

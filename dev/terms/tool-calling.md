@@ -25,10 +25,10 @@ Enables AI-driven external system interaction. Provides structured interface for
 ## Key Java API
 - Primary functions: Tool interface implementations
 - Creation: Via builder patterns
-- Access: LangChain4j tool interfaces
+- Access: plain-data tool specs tool interfaces
 
 ## Relationships
-- Uses: [LangChain4j Integration](langchain4j-integration.md), [Tools Sub Agent](tools-sub-agent.md)
+- Uses: [plain-data tool specs Integration](model-integration.md), [Tools Sub Agent](tools-sub-agent.md)
 - Used by: [Agent Node](agent-node.md)
 
 ## Examples

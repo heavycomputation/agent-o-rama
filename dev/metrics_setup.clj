@@ -28,7 +28,7 @@
    [com.rpl.agent-o-rama.impl.pobjects :as po]
    [com.rpl.agent-o-rama.impl.topology :as at]
    [com.rpl.agent-o-rama.impl.types :as aor-types]
-   [com.rpl.agent-o-rama.langchain4j :as lc4j]
+   [com.rpl.agent-o-rama.model :as model]
    [com.rpl.agent-o-rama.store :as store]
    [com.rpl.rama.test :as rtest]
    [com.rpl.test-common :as tc]
@@ -37,16 +37,7 @@
   (:use [com.rpl.rama]
         [com.rpl.rama.path])
   (:import
-   [com.rpl.rama.helpers TopologyUtils]
-   [dev.langchain4j.data.message AiMessage UserMessage]
-   [dev.langchain4j.model.chat StreamingChatModel]
-   [dev.langchain4j.model.chat.response ChatResponse$Builder]
-   [dev.langchain4j.model.output TokenUsage]
-   [dev.langchain4j.store.embedding
-    EmbeddingSearchRequest
-    EmbeddingSearchResult
-    EmbeddingStore]
-   [dev.langchain4j.store.embedding.filter.comparison IsEqualTo]))
+   [com.rpl.rama.helpers TopologyUtils]))
 
 ;; =============================================================================
 ;; Mock Objects & Helpers
@@ -54,35 +45,36 @@
 
 (def ^:dynamic *ticks* (atom 0))
 
-(defrecord MockChatModel []
-  StreamingChatModel
-  (doChat [this request handler]
-    (let [^UserMessage um (-> request .messages last)
-          m (.singleText um)
-          o (str m "***")
-          response (-> (ChatResponse$Builder.)
-                       (.aiMessage (AiMessage. o))
-                       (.tokenUsage
-                        (TokenUsage. (int (count m))
-                                     (int (count o))
-                                     (int (+ (count m) (count o) 2))))
-                       .build)]
+(defrecord MockChatProvider []
+  model/ChatProvider
+  (-provider-info [this] {:provider :mock :model "mock-1" :stream? true})
+  (-chat [this request]
+    (model/-stream-chat this request (fn [_])))
+  (-stream-chat [this request on-delta]
+    (let [m (model/content-text (:content (last (:messages request))))
+          o (str m "***")]
       (TopologyUtils/advanceSimTime 150)
       (when (h/contains-string? m "fail-model")
         (throw (ex-info "fail model" {})))
-      (.onPartialResponse handler "abc ")
+      (on-delta "abc ")
       (TopologyUtils/advanceSimTime 100)
-      (.onPartialResponse handler "def")
-      (.onCompleteResponse handler response))))
+      (on-delta "def")
+      {:message       {:role :assistant :content o}
+       :text          o
+       :finish-reason :stop
+       :usage         {:input-tokens  (count m)
+                       :output-tokens (count o)
+                       :total-tokens  (+ (count m) (count o) 2)}})))
 
-(deftype MockEmbeddingStore []
-  EmbeddingStore
-  (add [this embedding]
-    (TopologyUtils/advanceSimTime 10)
-    "999")
-  (search [this request]
-    (TopologyUtils/advanceSimTime 15)
-    (EmbeddingSearchResult. [])))
+(defn- record-db-op!
+  [agent-node type advance-ms info]
+  (let [start (h/current-time-millis)]
+    (TopologyUtils/advanceSimTime advance-ms)
+    (aor/record-nested-op! agent-node
+                           type
+                           start
+                           (h/current-time-millis)
+                           (assoc info "objectName" "emb"))))
 
 (defn- advancer-pred [amt]
   (fn [_] (TopologyUtils/advanceSimTime amt) true))
@@ -134,8 +126,7 @@
       (fn [fetcher input output run-info]
         {"rule-fired" (:rule-name run-info)})))
 
-   (aor/declare-agent-object-builder topology "my-model" (fn [_] (->MockChatModel)))
-   (aor/declare-agent-object-builder topology "emb" (fn [_] (MockEmbeddingStore.)))
+   (aor/declare-agent-object-builder topology "my-model" (fn [_] (->MockChatProvider)))
    (aor/declare-pstate-store topology "$$p" Object)
 
    (-> topology
@@ -146,22 +137,21 @@
         (fn [agent-node {:keys [flags delay-ms input] :as params}]
           (when delay-ms (TopologyUtils/advanceSimTime delay-ms))
           (when (contains? flags :model)
-            (lc4j/basic-chat (aor/get-agent-object agent-node "my-model") input))
+            (model/chat (aor/get-agent-object agent-node "my-model") input))
           (aor/emit! agent-node "process" params)))
        (aor/node
         "process"
         nil
         (fn [agent-node {:keys [flags input should-fail?] :as params}]
-          (let [p (aor/get-store agent-node "$$p")
-                ^EmbeddingStore es (aor/get-agent-object agent-node "emb")]
+          (let [p (aor/get-store agent-node "$$p")]
             (when (contains? flags :store-write)
               (store/pstate-transform! [(advancer-pred 10) (termval "value")] p :key))
             (when (contains? flags :store-read)
               (store/pstate-select-one [:key (advancer-pred 10)] p))
             (when (contains? flags :db-write)
-              (.add es (tc/embedding 1.0 2.0)))
+              (record-db-op! agent-node :db-write 10 {"op" "add"}))
             (when (contains? flags :db-read)
-              (.search es (EmbeddingSearchRequest. (tc/embedding 0.1 0.3) 5 0.75 (IsEqualTo. "b" 2))))
+              (record-db-op! agent-node :db-read 15 {"op" "search"}))
 
             (if should-fail?
               (throw (ex-info "Intentional test failure" {}))

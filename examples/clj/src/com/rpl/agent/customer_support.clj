@@ -11,26 +11,17 @@
   (:require
    [clojure.string :as str]
    [com.rpl.agent-o-rama :as aor]
-   [com.rpl.agent-o-rama.langchain4j :as lc4j]
-   [com.rpl.agent-o-rama.langchain4j.json :as lj]
+   [com.rpl.agent-o-rama.model :as model]
+   [com.rpl.agent-o-rama.model.openai :as openai]
+   [com.rpl.agent-o-rama.schema :as schema]
    [com.rpl.agent-o-rama.store :as store]
    [com.rpl.agent-o-rama.tools :as tools]
    [com.rpl.rama :as rama]
    [com.rpl.rama.path :as path]
    [com.rpl.rama.test :as rtest]
-   [jsonista.core :as j])
+   [jsonista.core :as j]
+   [org.httpkit.client :as http])
   (:import
-   [dev.langchain4j.data.document
-    Document]
-   [dev.langchain4j.data.message
-    SystemMessage
-    UserMessage]
-   [dev.langchain4j.model.openai
-    OpenAiChatModel]
-   [dev.langchain4j.web.search
-    WebSearchRequest]
-   [dev.langchain4j.web.search.tavily
-    TavilyWebSearchEngine]
    [java.time
     LocalDateTime]
    [java.util
@@ -470,27 +461,35 @@
        {:status  "not-found"
         :message (format "Car rental booking %s not found" booking-id)}))))
 
-(defn- tavily-web-search-engine
-  [api-key]
-  (-> (TavilyWebSearchEngine/builder)
-      (.apiKey api-key)
-      (.excludeDomains ["en.wikipedia.org"])
-      .build))
+(defn- tavily-search
+  "Performs a Tavily web search, returning a vector of result maps with
+  \"title\", \"url\", and \"content\" keys."
+  [api-key query max-results]
+  (let [{:keys [status body]}
+        @(http/post
+          "https://api.tavily.com/search"
+          {:headers {"Content-Type" "application/json"}
+           :body    (j/write-value-as-string
+                     {"api_key"         api-key
+                      "query"           query
+                      "max_results"     max-results
+                      "exclude_domains" ["en.wikipedia.org"]})
+           :timeout 60000})]
+    (if (= status 200)
+      (vec (get (j/read-value body) "results"))
+      (throw (ex-info "Tavily search failed" {:status status :body body})))))
 
 (defn web-search
   "Perform web search for travel-related information using Tavily."
   [agent-node config arguments]
-  (let [query          (get arguments "query")
-        ^TavilyWebSearchEngine tavily (aor/get-agent-object
-                                       agent-node
-                                       "tavily")
-        search-results (WebSearchRequest/from query 5)
-        results        (.search tavily search-results)
-        documents      (mapv (fn [^Document doc]
-                               {:title   (.getString (.metadata doc) "title")
-                                :url     (.getString (.metadata doc) "url")
-                                :snippet (.text doc)})
-                             (.toDocuments results))]
+  (let [query     (get arguments "query")
+        api-key   (aor/get-agent-object agent-node "tavily-api-key")
+        results   (tavily-search api-key query 5)
+        documents (mapv (fn [result]
+                          {:title   (get result "title")
+                           :url     (get result "url")
+                           :snippet (get result "content")})
+                        results)]
     (j/write-value-as-string
      {:status  "success"
       :results documents
@@ -523,183 +522,155 @@
 
 ;; Tool definitions using agent-o-rama tools framework
 (def CUSTOMER-SUPPORT-TOOLS
-  [(tools/tool-info
-    (tools/tool-specification
-     "fetch_user_flight_information"
-     (lj/object
-      {:description
-       "Retrieve current flight booking information for a specific passenger"
-       :required    ["passenger-id"]}
-      {"passenger-id" (lj/string "The passenger ID to look up")})
-     "Retrieve current flight booking information for a specific passenger")
+  [(tools/tool
+    {:name        "fetch_user_flight_information"
+     :description
+     "Retrieve current flight booking information for a specific passenger"
+     :schema      (schema/object
+                   {:required ["passenger-id"]}
+                   {"passenger-id" (schema/string "The passenger ID to look up")})}
     fetch-user-flight-information
     {:include-context? true})
 
-   (tools/tool-info
-    (tools/tool-specification
-     "search_flights"
-     (lj/object
-      {:description "Search for available flights between airports"
-       :required    ["departure-airport" "arrival-airport"]}
-      {"departure-airport" (lj/string "3-letter departure airport code")
-       "arrival-airport"   (lj/string "3-letter arrival airport code")
-       "start-date"        (lj/string "Earliest departure date (YYYY-MM-DD)")
-       "end-date"          (lj/string "Latest departure date (YYYY-MM-DD)")})
-     "Search for available flights between airports")
+   (tools/tool
+    {:name        "search_flights"
+     :description "Search for available flights between airports"
+     :schema      (schema/object
+                   {:required ["departure-airport" "arrival-airport"]}
+                   {"departure-airport" (schema/string "3-letter departure airport code")
+                    "arrival-airport"   (schema/string "3-letter arrival airport code")
+                    "start-date"        (schema/string "Earliest departure date (YYYY-MM-DD)")
+                    "end-date"          (schema/string "Latest departure date (YYYY-MM-DD)")})}
     search-flights
     {:include-context? true})
 
-   (tools/tool-info
-    (tools/tool-specification
-     "update_ticket_to_new_flight"
-     (lj/object
-      {:description "Update an existing ticket to a new flight"
-       :required    ["ticket-no" "new-flight-id"]}
-      {"ticket-no"     (lj/string "Ticket number to update")
-       "new-flight-id" (lj/string "New flight ID to change to")})
-     "Update an existing ticket to a new flight")
+   (tools/tool
+    {:name        "update_ticket_to_new_flight"
+     :description "Update an existing ticket to a new flight"
+     :schema      (schema/object
+                   {:required ["ticket-no" "new-flight-id"]}
+                   {"ticket-no"     (schema/string "Ticket number to update")
+                    "new-flight-id" (schema/string "New flight ID to change to")})}
     update-ticket-to-new-flight
     {:include-context? true})
 
-   (tools/tool-info
-    (tools/tool-specification
-     "cancel_ticket"
-     (lj/object
-      {:description "Cancel a flight ticket"
-       :required    ["ticket-no"]}
-      {"ticket-no" (lj/string "Ticket number to cancel")})
-     "Cancel a flight ticket")
+   (tools/tool
+    {:name        "cancel_ticket"
+     :description "Cancel a flight ticket"
+     :schema      (schema/object
+                   {:required ["ticket-no"]}
+                   {"ticket-no" (schema/string "Ticket number to cancel")})}
     cancel-ticket
     {:include-context? true})
 
-   (tools/tool-info
-    (tools/tool-specification
-     "search_hotels"
-     (lj/object
-      {:description "Search for hotels in a specific location"
-       :required    ["location"]}
-      {"location"      (lj/string "City or location to search")
-       "name"          (lj/string "Hotel name to search for")
-       "price-tier"    (lj/enum
-                        "Price category preference"
-                        ["budget" "business" "luxury"])
-       "checkin-date"  (lj/string "Check-in date (YYYY-MM-DD)")
-       "checkout-date" (lj/string "Check-out date (YYYY-MM-DD)")})
-     "Search for hotels in a specific location")
+   (tools/tool
+    {:name        "search_hotels"
+     :description "Search for hotels in a specific location"
+     :schema      (schema/object
+                   {:required ["location"]}
+                   {"location"      (schema/string "City or location to search")
+                    "name"          (schema/string "Hotel name to search for")
+                    "price-tier"    (schema/enum
+                                     "Price category preference"
+                                     ["budget" "business" "luxury"])
+                    "checkin-date"  (schema/string "Check-in date (YYYY-MM-DD)")
+                    "checkout-date" (schema/string "Check-out date (YYYY-MM-DD)")})}
     search-hotels
     {:include-context? true})
 
-   (tools/tool-info
-    (tools/tool-specification
-     "book_hotel"
-     (lj/object
-      {:description "Book a hotel reservation"
-       :required    ["hotel-id" "checkin-date" "checkout-date"]}
-      {"hotel-id"      (lj/string "Hotel ID to book")
-       "checkin-date"  (lj/string "Check-in date (YYYY-MM-DD)")
-       "checkout-date" (lj/string "Check-out date (YYYY-MM-DD)")})
-     "Book a hotel reservation")
+   (tools/tool
+    {:name        "book_hotel"
+     :description "Book a hotel reservation"
+     :schema      (schema/object
+                   {:required ["hotel-id" "checkin-date" "checkout-date"]}
+                   {"hotel-id"      (schema/string "Hotel ID to book")
+                    "checkin-date"  (schema/string "Check-in date (YYYY-MM-DD)")
+                    "checkout-date" (schema/string "Check-out date (YYYY-MM-DD)")})}
     book-hotel
     {:include-context? true})
 
-   (tools/tool-info
-    (tools/tool-specification
-     "search_car_rentals"
-     (lj/object
-      {:description "Search for car rental options"
-       :required    ["location"]}
-      {"location"   (lj/string "City or location for car rental")
-       "start-date" (lj/string "Rental start date (YYYY-MM-DD)")
-       "end-date"   (lj/string "Rental end date (YYYY-MM-DD)")
-       "car-type"   (lj/string "Preferred car type")})
-     "Search for car rental options")
+   (tools/tool
+    {:name        "search_car_rentals"
+     :description "Search for car rental options"
+     :schema      (schema/object
+                   {:required ["location"]}
+                   {"location"   (schema/string "City or location for car rental")
+                    "start-date" (schema/string "Rental start date (YYYY-MM-DD)")
+                    "end-date"   (schema/string "Rental end date (YYYY-MM-DD)")
+                    "car-type"   (schema/string "Preferred car type")})}
     search-car-rentals
     {:include-context? true})
 
-   (tools/tool-info
-    (tools/tool-specification
-     "book_car_rental"
-     (lj/object
-      {:description "Book a car rental"
-       :required    ["rental-id" "start-date" "end-date"]}
-      {"rental-id"  (lj/string "Car rental ID to book")
-       "start-date" (lj/string "Rental start date (YYYY-MM-DD)")
-       "end-date"   (lj/string "Rental end date (YYYY-MM-DD)")})
-     "Book a car rental")
+   (tools/tool
+    {:name        "book_car_rental"
+     :description "Book a car rental"
+     :schema      (schema/object
+                   {:required ["rental-id" "start-date" "end-date"]}
+                   {"rental-id"  (schema/string "Car rental ID to book")
+                    "start-date" (schema/string "Rental start date (YYYY-MM-DD)")
+                    "end-date"   (schema/string "Rental end date (YYYY-MM-DD)")})}
     book-car-rental
     {:include-context? true})
 
-   (tools/tool-info
-    (tools/tool-specification
-     "lookup_policy"
-     (lj/object
-      {:description "Look up company policies and procedures"
-       :required    ["query"]}
-      {"query"
-       (lj/string
-        "Policy topic to search for (e.g., baggage, cancellation, refund)")})
-     "Look up company policies and procedures")
+   (tools/tool
+    {:name        "lookup_policy"
+     :description "Look up company policies and procedures"
+     :schema      (schema/object
+                   {:required ["query"]}
+                   {"query"
+                    (schema/string
+                     "Policy topic to search for (e.g., baggage, cancellation, refund)")})}
     lookup-policy
     {:include-context? true})
 
-   (tools/tool-info
-    (tools/tool-specification
-     "search_excursions"
-     (lj/object
-      {:description "Search for available excursions and activities"
-       :required    ["location"]}
-      {"location" (lj/string "City or location to search for excursions")
-       "category" (lj/enum
-                   "Type of excursion"
-                   ["sightseeing" "nature" "entertainment" "adventure"])})
-     "Search for available excursions and activities")
+   (tools/tool
+    {:name        "search_excursions"
+     :description "Search for available excursions and activities"
+     :schema      (schema/object
+                   {:required ["location"]}
+                   {"location" (schema/string "City or location to search for excursions")
+                    "category" (schema/enum
+                                "Type of excursion"
+                                ["sightseeing" "nature" "entertainment" "adventure"])})}
     search-excursions
     {:include-context? true})
 
-   (tools/tool-info
-    (tools/tool-specification
-     "book_excursion"
-     (lj/object
-      {:description "Book an excursion or activity"
-       :required    ["excursion-id" "date"]}
-      {"excursion-id" (lj/string "Excursion ID to book")
-       "date"         (lj/string "Date for the excursion (YYYY-MM-DD)")})
-     "Book an excursion or activity")
+   (tools/tool
+    {:name        "book_excursion"
+     :description "Book an excursion or activity"
+     :schema      (schema/object
+                   {:required ["excursion-id" "date"]}
+                   {"excursion-id" (schema/string "Excursion ID to book")
+                    "date"         (schema/string "Date for the excursion (YYYY-MM-DD)")})}
     book-excursion
     {:include-context? true})
 
-   (tools/tool-info
-    (tools/tool-specification
-     "update_car_rental"
-     (lj/object
-      {:description "Update an existing car rental booking"
-       :required    ["booking-id" "start-date" "end-date"]}
-      {"booking-id" (lj/string "Car rental booking ID to update")
-       "start-date" (lj/string "New rental start date (YYYY-MM-DD)")
-       "end-date"   (lj/string "New rental end date (YYYY-MM-DD)")})
-     "Update an existing car rental booking")
+   (tools/tool
+    {:name        "update_car_rental"
+     :description "Update an existing car rental booking"
+     :schema      (schema/object
+                   {:required ["booking-id" "start-date" "end-date"]}
+                   {"booking-id" (schema/string "Car rental booking ID to update")
+                    "start-date" (schema/string "New rental start date (YYYY-MM-DD)")
+                    "end-date"   (schema/string "New rental end date (YYYY-MM-DD)")})}
     update-car-rental
     {:include-context? true})
 
-   (tools/tool-info
-    (tools/tool-specification
-     "cancel_car_rental"
-     (lj/object
-      {:description "Cancel a car rental booking"
-       :required    ["booking-id"]}
-      {"booking-id" (lj/string "Car rental booking ID to cancel")})
-     "Cancel a car rental booking")
+   (tools/tool
+    {:name        "cancel_car_rental"
+     :description "Cancel a car rental booking"
+     :schema      (schema/object
+                   {:required ["booking-id"]}
+                   {"booking-id" (schema/string "Car rental booking ID to cancel")})}
     cancel-car-rental
     {:include-context? true})
 
-   (tools/tool-info
-    (tools/tool-specification
-     "web_search"
-     (lj/object
-      {:description "Search for travel-related information online"
-       :required    ["query"]}
-      {"query" (lj/string "Search query for travel information")})
-     "Search for travel-related information online")
+   (tools/tool
+    {:name        "web_search"
+     :description "Search for travel-related information online"
+     :schema      (schema/object
+                   {:required ["query"]}
+                   {"query" (schema/string "Search query for travel information")})}
     web-search
     {:include-context? true})])
 
@@ -709,30 +680,16 @@
   [topology]
 
   ;; Declare OpenAI model
-  (aor/declare-agent-object
+  (openai/declare-model
    topology
-   "openai-api-key"
-   (System/getenv "OPENAI_API_KEY"))
+   "openai-model"
+   {:api-key-env "OPENAI_API_KEY"
+    :model       "gpt-5-mini"})
 
   (aor/declare-agent-object
    topology
    "tavily-api-key"
    (System/getenv "TAVILY_API_KEY"))
-
-  (aor/declare-agent-object-builder
-   topology
-   "openai-model"
-   (fn [setup]
-     (-> (OpenAiChatModel/builder)
-         (.apiKey (aor/get-agent-object setup "openai-api-key"))
-         (.modelName "gpt-4o-mini")
-         .build)))
-
-  (aor/declare-agent-object-builder
-   topology
-   "tavily"
-   (fn tavily [setup]
-     (tavily-web-search-engine (aor/get-agent-object setup "tavily-api-key"))))
 
   ;; Declare stores for persistent data
   (aor/declare-key-value-store topology "$$bookings" String Object)
@@ -878,31 +835,29 @@
              tools              (aor/agent-client agent-node "tools")
 
              ;; Build conversation history
-             system-msg         (SystemMessage. CUSTOMER-SUPPORT-SYSTEM-MESSAGE)
-             all-messages       (concat [system-msg] messages)
+             all-messages       (into [(model/system
+                                        CUSTOMER-SUPPORT-SYSTEM-MESSAGE)]
+                                      messages)
 
              ;; Make API call with tools
-             response           (lc4j/chat openai
-                                           (lc4j/chat-request
-                                            all-messages
-                                            {:tools CUSTOMER-SUPPORT-TOOLS}))
-             ai-message         (.aiMessage response)
-             tool-calls         (not-empty (vec (.toolExecutionRequests
-                                                 ai-message)))]
+             {:keys [message tool-calls text]}
+             (model/chat openai
+                         {:messages all-messages
+                          :tools    CUSTOMER-SUPPORT-TOOLS})]
 
          ;; Store conversation state
          (when passenger-id
            (store/put! conversation-store
                        passenger-id
-                       {:messages     (conj messages ai-message)
+                       {:messages     (conj messages message)
                         :last-updated (str (LocalDateTime/now))}))
 
          ;; Check if assistant wants to use tools
-         (if tool-calls
+         (if (seq tool-calls)
            (let [tool-results  (aor/agent-invoke tools tool-calls config)
-                 next-messages (into (conj messages ai-message) tool-results)]
+                 next-messages (into (conj messages message) tool-results)]
              (aor/emit! agent-node "chat" next-messages config))
-           (aor/result! agent-node (.text ai-message)))))))
+           (aor/result! agent-node text))))))
 
   (tools/new-tools-agent topology "tools" CUSTOMER-SUPPORT-TOOLS))
 
@@ -934,7 +889,7 @@
       (println "🔍 Testing flight search...")
       (let [result (aor/agent-invoke
                     agent
-                    [(UserMessage.
+                    [(model/user
                       "I need to find flights from ZUR to JFK for March 15th")]
                     {:passenger-id "P123"})]
         (println "Customer:"
@@ -946,7 +901,7 @@
       (println "📋 Testing policy lookup...")
       (let [result (aor/agent-invoke
                     agent
-                    [(UserMessage. "What is your baggage policy?")]
+                    [(model/user "What is your baggage policy?")]
                     {:passenger-id "P124"})]
         (println "Customer:" "What is your baggage policy?")
         (println "Agent:" result)
@@ -958,7 +913,7 @@
         [result
          (aor/agent-invoke
           agent
-          [(UserMessage.
+          [(model/user
             "I need a hotel in New York for March 15-17, preferably budget-friendly")]
           {:passenger-id "P125"})]
         (println

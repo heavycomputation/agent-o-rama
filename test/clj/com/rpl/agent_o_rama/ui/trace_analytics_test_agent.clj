@@ -5,16 +5,11 @@
   various types of traces for UI testing."
   (:require
    [com.rpl.agent-o-rama :as aor]
-   [com.rpl.agent-o-rama.langchain4j :as lc4j]
-   [com.rpl.agent-o-rama.langchain4j.json :as lj]
+   [com.rpl.agent-o-rama.model :as model]
+   [com.rpl.agent-o-rama.model.openai :as openai]
+   [com.rpl.agent-o-rama.schema :as schema]
    [com.rpl.agent-o-rama.store :as store]
-   [com.rpl.agent-o-rama.tools :as tools])
-  (:import
-   [dev.langchain4j.data.message
-    SystemMessage
-    UserMessage]
-   [dev.langchain4j.model.openai
-    OpenAiChatModel]))
+   [com.rpl.agent-o-rama.tools :as tools]))
 
 ;;; Tool for :tool-call mode
 (defn simple-calculator-tool
@@ -30,16 +25,16 @@
        "unknown operation"))))
 
 (def CALCULATOR-TOOL
-  (tools/tool-info
-   (tools/tool-specification
-    "calculator"
-    (lj/object
-     {:description "Calculator parameters"
-      :required    ["operation" "a" "b"]}
-     {"operation" (lj/enum "The operation" ["add" "multiply"])
-      "a"         (lj/number "First number")
-      "b"         (lj/number "Second number")})
-    "Performs arithmetic operations")
+  (tools/tool
+   {:name        "calculator"
+    :description "Performs arithmetic operations"
+    :schema      (schema/object
+                  {:description "Calculator parameters"
+                   :required    ["operation" "a" "b"]}
+                  {"operation" (schema/enum "The operation"
+                                            ["add" "multiply"])
+                   "a"         (schema/number "First number")
+                   "b"         (schema/number "Second number")})}
    simple-calculator-tool))
 
 (defn test-agent
@@ -64,31 +59,26 @@
       :chat
       ;; Use chat model
       (let [input    (or input "hello")
-            model    (aor/get-agent-object agent-node "openai-model")
-            messages [(SystemMessage. "You are helpful.")
-                      (UserMessage. (str input))]
-            response (lc4j/chat model (lc4j/chat-request messages {}))
-            text     (.text (.aiMessage response))]
+            m        (aor/get-agent-object agent-node "openai-model")
+            messages [(model/system "You are helpful.")
+                      (model/user (str input))]
+            response (model/chat m {:messages messages})]
         (aor/result!
          agent-node
          {"mode"     "chat"
-          "response" text
-          "messages" (conj messages (.aiMessage response))}))
+          "response" (:text response)
+          "messages" (conj messages (:message response))}))
 
       :tool-call
       ;; Use chat model with tools
-      (let [model          (aor/get-agent-object
+      (let [m              (aor/get-agent-object
                             agent-node
                             "openai-model")
             tools-agent    (aor/agent-client agent-node "ToolsAgent")
             ^String prompt (or input "What is 5 plus 3?")
-            response       (lc4j/chat
-                            model
-                            (lc4j/chat-request
-                             [(UserMessage. prompt)]
-                             {:tools [CALCULATOR-TOOL]}))
-            ai-message     (.aiMessage response)
-            tool-calls     (vec (.toolExecutionRequests ai-message))]
+            {:keys [tool-calls text]}
+            (model/chat m {:messages [(model/user prompt)]
+                           :tools    [CALCULATOR-TOOL]})]
         (if (seq tool-calls)
           (let [results (aor/agent-invoke tools-agent tool-calls)]
             (aor/result! agent-node
@@ -97,7 +87,7 @@
                           "tool-results" results}))
           (aor/result! agent-node
                        {"mode"     "tool-call"
-                        "response" (.text ai-message)})))
+                        "response" text})))
 
       :store
       ;; Use key-value store
@@ -156,12 +146,9 @@
    topology
    "openai-model"
    (fn [_setup]
-     (-> (OpenAiChatModel/builder)
-         (.apiKey (or (System/getenv "OPENAI_API_KEY") "fake-key"))
-         (.modelName "gpt-4o-mini")
-         (.temperature 0.7)
-         (.maxTokens (int 100))
-         .build)))
+     (openai/responses-model
+      {:api-key (or (System/getenv "OPENAI_API_KEY") "fake-key")
+       :model   "gpt-4o-mini"})))
 
   ;; Key-value store for :store mode
   (aor/declare-key-value-store topology "$$test-store" String String)

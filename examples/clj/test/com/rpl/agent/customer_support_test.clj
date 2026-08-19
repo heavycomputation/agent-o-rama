@@ -9,12 +9,10 @@
    [clojure.test :refer [deftest is testing]]
    [com.rpl.agent.customer-support :as cs]
    [com.rpl.agent-o-rama :as aor]
+   [com.rpl.agent-o-rama.model :as model]
    [com.rpl.rama :refer :all]
    [com.rpl.rama.path :refer :all]
-   [com.rpl.rama.test :as rtest])
-  (:import
-   [dev.langchain4j.data.message
-    UserMessage]))
+   [com.rpl.rama.test :as rtest]))
 
 ;; Test helpers
 
@@ -54,8 +52,7 @@
        ;; bookings
        (let [result (aor/agent-invoke
                      agent
-                     [(UserMessage.
-                       "Search for flights from ZUR to JFK on 2024-03-15")]
+                     [(model/user "Search for flights from ZUR to JFK on 2024-03-15")]
                      {:passenger-id "TEST123"})]
          (is (string? result))
          (is (not (str/blank? result)))
@@ -69,8 +66,7 @@
          [result
           (aor/agent-invoke
            agent
-           [(UserMessage.
-             "I need to find flights from ZUR to JFK departing on March 15, 2024")]
+           [(model/user "I need to find flights from ZUR to JFK departing on March 15, 2024")]
            {:passenger-id "TEST124"})]
          (is (string? result))
          (is (not (str/blank? result)))
@@ -86,8 +82,7 @@
        (let [search-result
              (aor/agent-invoke
               agent
-              [(UserMessage.
-                "Can you help me change my ticket T456 to flight LX102?")]
+              [(model/user "Can you help me change my ticket T456 to flight LX102?")]
               {:passenger-id "TEST125"})]
          (is (string? search-result))
          (is (not (str/blank? search-result))))))))
@@ -98,7 +93,7 @@
      (fn [agent]
        (let [result (aor/agent-invoke
                      agent
-                     [(UserMessage. "I need to cancel my ticket number T789")]
+                     [(model/user "I need to cancel my ticket number T789")]
                      {:passenger-id "TEST126"})]
          (is (string? result))
          (is (not (str/blank? result)))
@@ -111,7 +106,7 @@
      (testing "search for excursions in New York"
        (let [result (aor/agent-invoke
                      agent
-                     [(UserMessage. "Find excursions in New York")]
+                     [(model/user "Find excursions in New York")]
                      {:passenger-id "TEST130"})]
          (is (string? result))
          (is (str/includes? result "excursion")))))))
@@ -122,7 +117,7 @@
      (testing "book an excursion"
        (let [result (aor/agent-invoke
                      agent
-                     [(UserMessage. "Book the Statue of Liberty Tour for March 20th")]
+                     [(model/user "Book the Statue of Liberty Tour for March 20th")]
                      {:passenger-id "TEST131"})]
          (is (string? result))
          (is (str/includes? result "book")))))))
@@ -133,7 +128,7 @@
      (testing "update car rental booking"
        (let [result (aor/agent-invoke
                      agent
-                     [(UserMessage. "I need to update my car rental booking to different dates")]
+                     [(model/user "I need to update my car rental booking to different dates")]
                      {:passenger-id "TEST132"})]
          (is (string? result))
          (is (or (str/includes? result "update")
@@ -145,7 +140,7 @@
      (testing "cancel car rental booking"
        (let [result (aor/agent-invoke
                      agent
-                     [(UserMessage. "I want to cancel my car rental booking")]
+                     [(model/user "I want to cancel my car rental booking")]
                      {:passenger-id "TEST133"})]
          (is (string? result))
          (is (or (str/includes? result "cancel")
@@ -157,7 +152,7 @@
      (testing "search for travel information"
        (let [result (aor/agent-invoke
                      agent
-                     [(UserMessage. "Search for weather information in New York")]
+                     [(model/user "Search for weather information in New York")]
                      {:passenger-id "TEST134"})]
          (is (string? result))
          (is (or (str/includes? result "search")
@@ -169,7 +164,7 @@
      (fn [agent]
        (let [result (aor/agent-invoke
                      agent
-                     [(UserMessage. "Can you help me find hotels in New York?")]
+                     [(model/user "Can you help me find hotels in New York?")]
                      {:passenger-id "TEST127"})]
          (is (string? result))
          (is (not (str/blank? result)))
@@ -183,8 +178,7 @@
        (let [result
              (aor/agent-invoke
               agent
-              [(UserMessage.
-                "I'd like to book the Grand Hotel from March 15 to March 17")]
+              [(model/user "I'd like to book the Grand Hotel from March 15 to March 17")]
               {:passenger-id "TEST128"})]
          (is (string? result))
          (is (not (str/blank? result))))))))
@@ -195,7 +189,7 @@
      (fn [agent]
        (let [result (aor/agent-invoke
                      agent
-                     [(UserMessage. "I need a car rental in New York")]
+                     [(model/user "I need a car rental in New York")]
                      {:passenger-id "TEST129"})]
          (is (string? result))
          (is (not (str/blank? result)))
@@ -209,8 +203,7 @@
        (let [result
              (aor/agent-invoke
               agent
-              [(UserMessage.
-                "I want to book car rental R001 from March 15 to March 17")]
+              [(model/user "I want to book car rental R001 from March 15 to March 17")]
               {:passenger-id "TEST130"})]
          (is (string? result))
          (is (not (str/blank? result))))))))
@@ -221,7 +214,7 @@
      (fn [agent]
        (let [result (aor/agent-invoke
                      agent
-                     [(UserMessage. "What is your baggage policy?")]
+                     [(model/user "What is your baggage policy?")]
                      {:passenger-id "TEST131"})]
          (is (string? result))
          (is (not (str/blank? result)))
@@ -248,7 +241,7 @@
           (testing "flight search interaction"
             (let [result (aor/agent-invoke
                           agent
-                          [(UserMessage. "Search for flights from ZUR to JFK")]
+                          [(model/user "Search for flights from ZUR to JFK")]
                           {:passenger-id "TEST123"})]
               (is (string? result))
               (is (not (str/blank? result)))))
@@ -256,7 +249,7 @@
           (testing "policy lookup interaction"
             (let [result (aor/agent-invoke
                           agent
-                          [(UserMessage. "What is the baggage policy?")]
+                          [(model/user "What is the baggage policy?")]
                           {:passenger-id "TEST124"})]
               (is (string? result))
               (is (not (str/blank? result))))))))))

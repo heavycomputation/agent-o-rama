@@ -119,7 +119,7 @@
 
       :else
       (throw (h/ex-info
-              "Cannot convert tool for the OpenAI Responses API — use com.rpl.agent-o-rama.tools/tool (data specs), not langchain4j tool-specification"
+              "Cannot convert tool for the OpenAI Responses API — use com.rpl.agent-o-rama.tools/tool (data specs)"
               {:tool-class (class spec)})))))
 
 (defn- tool-choice->wire

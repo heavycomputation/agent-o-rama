@@ -22,7 +22,8 @@
       \"description\": \"Information about the user\"
     },
     \"prompt\": {
-      \"x-javaType\": \"dev.langchain4j.data.message.UserMessage\",
+      \"type\": \"string\",
+      \"description\": \"The user's question\"
     }
   },
   \"required\": [\"context\", \"prompt\"]

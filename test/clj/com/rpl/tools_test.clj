@@ -5,7 +5,7 @@
         [com.rpl.rama.path])
   (:require
    [com.rpl.agent-o-rama :as aor]
-   [com.rpl.agent-o-rama.langchain4j.json :as lj]
+   [com.rpl.agent-o-rama.schema :as schema]
    [com.rpl.agent-o-rama.tools :as tools]
    [com.rpl.agent-o-rama.impl.agent-node :as anode]
    [com.rpl.agent-o-rama.impl.helpers :as h]
@@ -17,30 +17,23 @@
    [com.rpl.rama.test :as rtest]
    [com.rpl.test-common :as tc]
    [jsonista.core :as j]
-   [meander.epsilon :as m])
-  (:import
-   [dev.langchain4j.agent.tool
-    ToolExecutionRequest]
-   [dev.langchain4j.data.message
-    ToolExecutionResultMessage]))
+   [meander.epsilon :as m]))
 
 (def TOOLS
-  [(tools/tool-info
-    (tools/tool-specification
-     "add"
-     (lj/object
-      {"a" (lj/number "first number")
-       "b" (lj/number "second number")})
-     "Add two numbers together")
+  [(tools/tool
+    {:name        "add"
+     :description "Add two numbers together"
+     :schema      (schema/object
+                   {"a" (schema/number "first number")
+                    "b" (schema/number "second number")})}
     (fn [args] (+ (get args "a") (get args "b"))))
-   (tools/tool-info
-    (tools/tool-specification
-     "math-with-context"
-     (lj/object
-      {"a" (lj/number "first number")
-       "b" (lj/number "second number")
-       "c" (lj/number "third number")})
-     "(a-1)*(b+1)*caller-data+c")
+   (tools/tool
+    {:name        "math-with-context"
+     :description "(a-1)*(b+1)*caller-data+c"
+     :schema      (schema/object
+                   {"a" (schema/number "first number")
+                    "b" (schema/number "second number")
+                    "c" (schema/number "third number")})}
     (fn [agent-node caller-data args]
       (aor/record-nested-op!
        agent-node
@@ -57,11 +50,9 @@
                 inc)
             caller-data)))
     {:include-context? true})
-   (tools/tool-info
-    (tools/tool-specification
-     "throw"
-     (lj/object
-      {"type" (lj/string)}))
+   (tools/tool
+    {:name   "throw"
+     :schema (schema/object {"type" (schema/string)})}
     (fn [args]
       (let [type (get args "type")]
         (condp = type
@@ -73,17 +64,18 @@
 
 (defn mk-request
   [tool-name id args]
-  (-> (ToolExecutionRequest/builder)
-      (.id id)
-      (.arguments (j/write-value-as-string args))
-      (.name tool-name)
-      .build))
+  {:id   id
+   :name tool-name
+   ;; args as a JSON string exercises the parse path; providers normally
+   ;; hand over parsed maps
+   :args (j/write-value-as-string args)})
 
 (defn res=
-  [^ToolExecutionResultMessage res id name text]
-  (let [t (.text res)]
-    (and (= id (.id res))
-         (= name (.toolName res))
+  [res id name text]
+  (let [t (:content res)]
+    (and (= :tool (:role res))
+         (= id (:tool-call-id res))
+         (= name (:name res))
          (if (string? text)
            (= text t)
            (some? (re-matches text t)
@@ -165,7 +157,7 @@
 
        (bind sort-res
          (fn [res]
-           (sort-by #(.id ^ToolExecutionResultMessage %) res)))
+           (sort-by :tool-call-id res)))
 
        (bind tool-nested-ops
          (fn [{:keys [task-id agent-invoke-id]}]

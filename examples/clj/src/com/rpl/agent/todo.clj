@@ -4,8 +4,9 @@
   (:require
    [clojure.string :as str]
    [com.rpl.agent-o-rama :as aor]
-   [com.rpl.agent-o-rama.langchain4j :as lc4j]
-   [com.rpl.agent-o-rama.langchain4j.json :as lj]
+   [com.rpl.agent-o-rama.model :as model]
+   [com.rpl.agent-o-rama.model.openai :as openai]
+   [com.rpl.agent-o-rama.schema :as schema]
    [com.rpl.agent-o-rama.store :as store]
    [com.rpl.agent-o-rama.tools :as tools]
    [com.rpl.rama :as rama]
@@ -14,11 +15,7 @@
    [jsonista.core :as j])
   (:import
    [com.rpl.agentorama
-    AgentComplete]
-   [dev.langchain4j.data.message SystemMessage
-    UserMessage]
-   [dev.langchain4j.model.openai OpenAiChatModel
-    OpenAiStreamingChatModel]))
+    AgentComplete]))
 
 (defn under->dash [s]
   (str/replace s \_  \-))
@@ -89,8 +86,8 @@ Extract a profile of the user.
 
 Create the expected response format based solely on the information available in
 the chat. If you don't have information to put in specific fields, or you want
-to leave them with their current values, then leave them out of the returned
-object.
+to leave them with their current values, then repeat their current values (use
+empty strings or empty lists for fields with no information).
 
 <current_profile>
 %s
@@ -126,38 +123,38 @@ Your current instructions are:
 </current_instructions>")
 
 (def ^:private Profile
-  (lj/object
+  (schema/strict-object
    {:description "The profile of a user."}
-   {"name"        (lj/string "The user's name")
-    "job"         (lj/string "The user's job")
-    "connections" (lj/array
+   {"name"        (schema/string "The user's name")
+    "job"         (schema/string "The user's job")
+    "connections" (schema/array
                    "Personal connection of the user, such as family members, friends, or coworkers"
-                   (lj/string "A personal connection"))
-    "interests"   (lj/array
+                   (schema/string "A personal connection"))
+    "interests"   (schema/array
                    "Interests that the user has"
-                   (lj/string "An interest that the user has"))}))
+                   (schema/string "An interest that the user has"))}))
 
 (def ^:private ToDoFields
-  {"task"      (lj/string "The task to be completed.")
-   "deadline"  (lj/string
+  {"task"      (schema/string "The task to be completed.")
+   "deadline"  (schema/string
                 "When the task needs to be completed by (if applicable)")
-   "solutions" (lj/array
+   "solutions" (schema/array
                 "List of specific, actionable solutions (e.g., specific ideas, service providers, or concrete options relevant to completing the task)",
-                (lj/string "A specific, actionable solution"))
-   "status"    (lj/enum
+                (schema/string "A specific, actionable solution"))
+   "status"    (schema/enum
                 "Current status of the task"
                 ["not started" "in progress" "done" "archived"])})
 
 (def ^:private ToDo
-  (lj/object
+  (schema/object
    {:description "A ToDo item"
     :required    ["task"]}
    ToDoFields))
 
-(def ^:pricate Instruction
-  (lj/object
+(def ^:private Instruction
+  (schema/strict-object
    {:description "Instruction"}
-   {"instructions" (lj/string "instructions")}))
+   {"instructions" (schema/string "instructions")}))
 
 (defn create-todo-tool
   [agent-node {:keys [user-id]} todo]
@@ -197,29 +194,28 @@ Your current instructions are:
     "deleted"))
 
 (def TODO-TOOLS
-  [(tools/tool-info
-    (tools/tool-specification
-     "CreateToDo"
-     ToDo
-     "Creates a todo using info from chat messages")
+  [(tools/tool
+    {:name        "CreateToDo"
+     :description "Creates a todo using info from chat messages"
+     :schema      ToDo}
     create-todo-tool
     {:include-context? true})
-   (tools/tool-info
-    (tools/tool-specification
-     "UpdateToDo"
-     (lj/object
-      {:description "Instruction to update an existing ToDo item"}
-      {"uuid" (lj/string "The uuid identifying the ToDo item to update")
-       "todo" ToDo})
-     "Updates an existing todo using from chat messages")
+   (tools/tool
+    {:name        "UpdateToDo"
+     :description "Updates an existing todo using from chat messages"
+     :schema      (schema/object
+                   {:description "Instruction to update an existing ToDo item"}
+                   {"uuid" (schema/string
+                            "The uuid identifying the ToDo item to update")
+                    "todo" ToDo})}
     update-todo-tool
     {:include-context? true})
-   (tools/tool-info
-    (tools/tool-specification
-     "DeleteToDo"
-     (lj/object
-      {"uuid" (lj/string "The uuid identifying the ToDo item to delete")})
-     "Updates profile, todo or instruction memory with info from chat messages")
+   (tools/tool
+    {:name        "DeleteToDo"
+     :description "Deletes an existing todo identified by its uuid"
+     :schema      (schema/object
+                   {"uuid" (schema/string
+                            "The uuid identifying the ToDo item to delete")})}
     delete-todo-tool
     {:include-context? true})])
 
@@ -230,16 +226,14 @@ Your current instructions are:
         profile       (store/get store user-id)
         system-msg    (format UPDATE-PROFILE profile)
         chat-messages (into
-                       [(SystemMessage. system-msg)]
+                       [(model/system system-msg)]
                        messages)
-        chat-options  {:response-format
-                       (lc4j/json-response-format "Profile" Profile)}
-        response      (lc4j/chat
+        response      (model/chat
                        chat-model
-                       (lc4j/chat-request
-                        chat-messages
-                        chat-options))
-        new-profile   (j/read-value (.text (.aiMessage response)))]
+                       {:messages      chat-messages
+                        :output-schema {:name   "Profile"
+                                        :schema Profile}})
+        new-profile   (:parsed response)]
     (store/update! store user-id #(merge % new-profile)))
   "updated")
 
@@ -258,18 +252,16 @@ Your current instructions are:
                        UPDATE-TODOS
                        (j/write-value-as-string todos MAPPER))
         chat-messages (->
-                       [(SystemMessage. system-msg)]
+                       [(model/system system-msg)]
                        (into messages)
                        #_(conj
-                          (UserMessage.
+                          (model/user
                            "Please update the ToDos based on the conversation")))
-        chat-options  {:tools TODO-TOOLS}
-        response      (lc4j/chat
-                       chat-model
-                       (lc4j/chat-request chat-messages chat-options))
-        ai-message    (.aiMessage response)
-        tool-calls    (not-empty (vec (.toolExecutionRequests ai-message)))]
-    (when tool-calls
+        {:keys [tool-calls]} (model/chat
+                              chat-model
+                              {:messages chat-messages
+                               :tools    TODO-TOOLS})]
+    (when (seq tool-calls)
       (aor/agent-invoke todo-tools tool-calls config))
     "updated"))
 
@@ -283,19 +275,17 @@ Your current instructions are:
                          CREATE-INSTRUCTIONS
                          instruction)
         chat-messages   (->
-                         [(SystemMessage. system-msg)]
+                         [(model/system system-msg)]
                          (into messages)
                          (conj
-                          (UserMessage.
+                          (model/user
                            "Please update the instructions based on the conversation")))
-        chat-options    {:response-format
-                         (lc4j/json-response-format "Instruction" Instruction)}
-        response        (lc4j/chat
+        response        (model/chat
                          chat-model
-                         (lc4j/chat-request
-                          chat-messages
-                          chat-options))
-        new-instruction (j/read-value (.text (.aiMessage response)))]
+                         {:messages      chat-messages
+                          :output-schema {:name   "Instruction"
+                                          :schema Instruction}})
+        new-instruction (:parsed response)]
 
     (store/put! store user-id new-instruction)
     "updated"))
@@ -310,48 +300,32 @@ Your current instructions are:
       "instructions" (update-instruction agent-node messages config))))
 
 (def TOOLS
-  [(tools/tool-info
-    (tools/tool-specification
-     "UpdateMemory"
-     (lj/object
-      {:description "Updates persistent memory for info from chat messages"
-       :required    ["update_type"]}
-      {"update_type" (lj/enum ["profile" "todo" "instructions"])})
-     "Updates profile, todo or instruction memory with info from chat messages")
+  [(tools/tool
+    {:name        "UpdateMemory"
+     :description "Updates profile, todo or instruction memory with info from chat messages"
+     :schema      (schema/object
+                   {:description "Updates persistent memory for info from chat messages"
+                    :required    ["update_type"]}
+                   {"update_type" (schema/enum
+                                   ["profile" "todo" "instructions"])})}
     update-tool
     {:include-context? true})])
 
 (aor/defagentmodule TodoModule
   [topology]
 
-  (aor/declare-agent-object
-   topology
-   "openai-api-key"
-   (System/getenv "OPENAI_API_KEY"))
-
-  (aor/declare-agent-object-builder
+  (openai/declare-model
    topology
    "openai"
-   (fn [setup]
-     (-> (OpenAiStreamingChatModel/builder)
-         (.apiKey (aor/get-agent-object setup "openai-api-key"))
-         (.modelName "gpt-4o-mini")
-         (.temperature 0.0)
-         (.logRequests true)
-         (.logResponses true)
-         .build)))
+   {:api-key-env "OPENAI_API_KEY"
+    :model       "gpt-5-mini"
+    :stream?     true})
 
-  (aor/declare-agent-object-builder
+  (openai/declare-model
    topology
    "openai-non-streaming"
-   (fn [setup]
-     (-> (OpenAiChatModel/builder)
-         (.apiKey (aor/get-agent-object setup "openai-api-key"))
-         (.modelName "gpt-4o-mini")
-         (.temperature 0.0)
-         (.logRequests true)
-         (.logResponses true)
-         .build)))
+   {:api-key-env "OPENAI_API_KEY"
+    :model       "gpt-5-mini"})
 
   (aor/declare-document-store
    topology
@@ -398,20 +372,15 @@ Your current instructions are:
                                 (j/write-value-as-string todos MAPPER)
                                 instructions)
             chat-messages      (into
-                                [(SystemMessage. system-msg)]
+                                [(model/system system-msg)]
                                 messages)
-            chat-options       {:tools TOOLS}
-            response           (lc4j/chat
-                                chat-model
-                                (lc4j/chat-request
-                                 chat-messages
-                                 chat-options))
-            ai-message         (.aiMessage response)
-            tool-calls         (not-empty
-                                (vec
-                                 (.toolExecutionRequests ai-message)))
-            next-messages      (conj messages ai-message)]
-        (if tool-calls
+            {:keys [message tool-calls]}
+            (model/chat
+             chat-model
+             {:messages chat-messages
+              :tools    TOOLS})
+            next-messages      (conj messages message)]
+        (if (seq tool-calls)
           (let [tool-results  (aor/agent-invoke
                                tools
                                tool-calls
@@ -451,7 +420,7 @@ Your current instructions are:
             (when inputs
               (let [agent-invoke (aor/agent-initiate
                                   agent
-                                  [(UserMessage. (first inputs))]
+                                  [(model/user (first inputs))]
                                   {:user-id user-id})
                     step         (aor/agent-next-step agent agent-invoke)
                     result       (:result step)]

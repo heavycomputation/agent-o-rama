@@ -1,23 +1,23 @@
 (ns com.rpl.agent-o-rama.tools
-  "Tools integration for AI agents using LangChain4j tool specifications.\n
+  "Tools integration for AI agents.\n
 \n
-This namespace provides utilities for creating tool specifications and tool agents that can be used with AI models for function calling. Tools allow AI agents to interact with external systems, perform calculations, and execute custom logic during conversation.\n
+This namespace provides utilities for defining tools and tool agents for use with AI models via function calling. Tools allow AI agents to interact with external systems, perform calculations, and execute custom logic during conversation.\n
 \n
 Key concepts:\n
-  - Tool specifications define the interface for tools (name, parameters, description)
-  - Tool info combines specifications with implementation functions
-  - Tool agents execute tool calls and return results to AI models
+  - A tool is defined with [[tool]]: a plain-data spec (name, description, JSON schema for parameters) plus an implementation function
+  - Tool agents ([[new-tools-agent]]) execute the tool calls requested by AI models and return results
   - Error handlers control how tool execution failures are handled
 \n
 Example:\n
 <pre>
 (def calculator-tool
-  (tool-info
-    (tool-specification
-      \"add\"
-      (lj/object {\"a\" (lj/number \"first number\")
-                 \"b\" (lj/number \"second number\")})
-      \"Add two numbers together\")
+  (tool
+    {:name        \"add\"
+     :description \"Add two numbers together\"
+     :schema      (schema/object
+                   {:required [\"a\" \"b\"]}
+                   {\"a\" (schema/number \"first number\")
+                    \"b\" (schema/number \"second number\")})}
     (fn [args] (+ (get args \"a\") (get args \"b\")))))
 (new-tools-agent topology \"calculator\" [calculator-tool])
 </pre>"
@@ -28,90 +28,11 @@ Example:\n
    [com.rpl.agent-o-rama.impl.helpers :as h]
    [com.rpl.agent-o-rama.impl.tools-impl :as tools-impl]
    [com.rpl.agent-o-rama.impl.types :as aor-types]
-   [com.rpl.rama.aggs :as aggs])
-  (:import
-   [dev.langchain4j.agent.tool
-    ToolSpecification]))
-
-(defn tool-specification
-  "Creates a tool specification that defines the interface for a tool.\n
-\n
-Tool specifications describe how AI models should call tools, including the tool name, parameter schema, and description. They are used with LangChain4j to enable function calling in AI conversations.\n
-\n
-Args:\n
-  - name - String name of the tool (must be unique within a tool agent)
-  - parameters-json-schema - JSON schema defining the tool's parameters
-  - description - String description of what the tool does (optional)
-\n
-Returns:\n
-  - ToolSpecification - LangChain4j tool specification instance
-\n
-Example:\n
-<pre>
-(tool-specification
-  \"calculate\"
-  (lj/object {\"expression\" (lj/string \"mathematical expression to evaluate\")})
-  \"Evaluates a mathematical expression\")
-</pre>"
-  ([name parameters-json-schema]
-   (tool-specification name parameters-json-schema nil))
-  ([name parameters-json-schema description]
-   (-> (ToolSpecification/builder)
-       (.name name)
-       (.parameters parameters-json-schema)
-       (.description description)
-       .build)))
-
-(defn tool-info
-  "Creates a tool info that combines a tool specification with its implementation function.\n
-\n
-Tool info is the complete definition of a tool, including both its interface (specification) and implementation (function). Tools can optionally include context from the agent node for advanced functionality.\n
-\n
-Args:\n
-  - tool-specification - ToolSpecification instance created with [[tool-specification]]
-  - tool-fn - Function that implements the tool logic. Takes either:
-    - (args) - Just the parsed arguments map
-    - (agent-node caller-data args) - Agent node, caller data, and arguments
-  - options - Optional map with configuration:
-    - :include-context? - Boolean, whether to pass agent-node and caller-data to tool-fn (default false)
-\n
-Returns:\n
-  - ToolInfo - Complete tool definition for use with [[new-tools-agent]]\n
-\n
-Example:\n
-<pre>
-(tool-info
-  (tool-specification \"add\" params \"Add two numbers\")
-  (fn [args] (+ (get args \"a\") (get args \"b\"))))
-;; With context access\n
-(tool-info
-  (tool-specification \"context-aware\" params \"Uses agent context\")
-  (fn [agent-node caller-data args]
-    (let [store (aor/get-store agent-node \"$$cache\")]
-      (aor/put! store \"key\" (get args \"value\"))))
-  {:include-context? true})
-</pre>"
-  ([tool-specification tool-fn]
-   (tool-info tool-specification tool-fn nil))
-  ([tool-specification tool-fn options]
-   (let [options (merge {:include-context? false} options)]
-     (h/validate-options! tool-specification
-                          options
-                          {:include-context? h/boolean-spec})
-     (when-not (ifn? tool-fn)
-       (throw (h/ex-info "Invalid tool function" {:type (class tool-fn)})))
-     (when-not (instance? ToolSpecification tool-specification)
-       (throw (h/ex-info "Invalid tool specification"
-                         {:type (class tool-specification)})))
-     (aor-types/->ToolInfoImpl tool-specification
-                               tool-fn
-                               (:include-context? options))
-   )))
+   [com.rpl.rama.aggs :as aggs]))
 
 (defn tool
   "Creates a complete tool definition from a plain-data spec and an
-  implementation function — the provider-neutral counterpart of
-  [[tool-specification]] + [[tool-info]], with no langchain4j involvement.\n
+  implementation function.\n
 \n
 Tools created this way work with [[new-tools-agent]] and with native model
 integrations (the :tools request key of com.rpl.agent-o-rama.model/chat).
@@ -271,24 +192,25 @@ Example:\n
 \n
 A tools agent is a special type of agent designed to execute tool calls requested by AI models. It processes batches of tool execution requests, executes the corresponding tool functions, and returns results back to the calling agent.\n
 \n
-The agent uses aggregation to collect results from parallel tool executions and returns them as a vector of ToolExecutionResultMessage objects.\n
+The agent uses aggregation to collect results from parallel tool executions and returns them as a vector of {:role :tool ...} messages ready to append to the conversation.\n
 \n
 Args:\n
   - topology - agent topology instance
   - name - String name for the tools agent
-  - tools - Collection of ToolInfo instances created with [[tool-info]]
+  - tools - Collection of ToolInfo instances created with [[tool]]
   - options - Optional map with configuration:
     - :error-handler - Function that handles tool execution errors (default: [[error-handler-default]])
 \n
 Example:\n
 <pre>
 (let [calculator-tool
-      (tool-info
-        (tool-specification
-          \"add\"
-          (lj/object {\"a\" (lj/number \"first number\")
-                     \"b\" (lj/number \"second number\")})
-          \"Add two numbers together\")
+      (tool
+        {:name        \"add\"
+         :description \"Add two numbers together\"
+         :schema      (schema/object
+                       {:required [\"a\" \"b\"]}
+                       {\"a\" (schema/number \"first number\")
+                        \"b\" (schema/number \"second number\")})}
         (fn [args] (+ (get args \"a\") (get args \"b\"))))]
   (new-tools-agent topology \"calculator\" [calculator-tool]))
 ;; With custom error handling

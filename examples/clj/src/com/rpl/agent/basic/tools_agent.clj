@@ -1,25 +1,21 @@
 (ns com.rpl.agent.basic.tools-agent
-  "Demonstrates LangChain4j tools integration with OpenAI chat models.
+  "Demonstrates tools integration with native OpenAI chat models.
 
   Features demonstrated:
   - new-tools-agent: Create specialized agent for tool execution
-  - tool-specification: Define tool schemas for LangChain4j
+  - tools/tool: Define tool specs (name, description, JSON schema) plus
+    implementation functions
   - OpenAI model with tool calling capabilities
   - Natural language to tool execution workflow"
   (:require
    [clojure.string :as str]
    [com.rpl.agent-o-rama :as aor]
-   [com.rpl.agent-o-rama.langchain4j :as lc4j]
-   [com.rpl.agent-o-rama.langchain4j.json :as lj]
+   [com.rpl.agent-o-rama.model :as model]
+   [com.rpl.agent-o-rama.model.openai :as openai]
+   [com.rpl.agent-o-rama.schema :as schema]
    [com.rpl.agent-o-rama.tools :as tools]
    [com.rpl.rama :as rama]
-   [com.rpl.rama.test :as rtest])
-  (:import
-   [dev.langchain4j.data.message
-    ToolExecutionResultMessage
-    UserMessage]
-   [dev.langchain4j.model.openai
-    OpenAiChatModel]))
+   [com.rpl.rama.test :as rtest]))
 
 ;;; Tool function definitions
 (defn calculate-tool
@@ -50,47 +46,44 @@
       "length" (str (count text))
       "Error: Unknown string operation")))
 
-;;; Tool specifications for LangChain4j
+;;; Tool definitions: plain-data spec (name, description, JSON schema) plus
+;;; implementation function
 (def CALCULATOR-TOOL
-  (tools/tool-info
-   (tools/tool-specification
-    "calculator"
-    (lj/object
-     {:description "Parameters for calculator operations"
-      :required    ["operation" "a" "b"]}
-     {"operation" (lj/enum "The arithmetic operation to perform"
-                           ["add" "subtract" "multiply" "divide"])
-      "a"         (lj/number "The first number")
-      "b"         (lj/number "The second number")})
-    "Performs basic arithmetic operations on two numbers")
+  (tools/tool
+   {:name        "calculator"
+    :description "Performs basic arithmetic operations on two numbers"
+    :schema      (schema/object
+                  {:description "Parameters for calculator operations"
+                   :required    ["operation" "a" "b"]}
+                  {"operation" (schema/enum "The arithmetic operation to perform"
+                                            ["add" "subtract" "multiply" "divide"])
+                   "a"         (schema/number "The first number")
+                   "b"         (schema/number "The second number")})}
    calculate-tool))
 
 (def STRING-TOOL
-  (tools/tool-info
-   (tools/tool-specification
-    "string-processor"
-    (lj/object
-     {:description "Parameters for string manipulation operations"
-      :required    ["text" "operation"]}
-     {"text"      (lj/string "The text to process")
-      "operation" (lj/enum "The string operation to perform"
-                           ["uppercase" "lowercase" "reverse" "length"])})
-    "Performs string manipulation operations")
+  (tools/tool
+   {:name        "string-processor"
+    :description "Performs string manipulation operations"
+    :schema      (schema/object
+                  {:description "Parameters for string manipulation operations"
+                   :required    ["text" "operation"]}
+                  {"text"      (schema/string "The text to process")
+                   "operation" (schema/enum "The string operation to perform"
+                                            ["uppercase" "lowercase" "reverse" "length"])})}
    string-tool))
 
 ;;; Agent module demonstrating tools functionality
 (aor/defagentmodule ToolsAgentModule
   [topology]
 
-  ;; Declare OpenAI model
-  (aor/declare-agent-object-builder
+  ;; Declare OpenAI model as an auto-traced agent object
+  (openai/declare-model
    topology
    "openai-model"
-   (fn [_setup]
-     (-> (OpenAiChatModel/builder)
-         (.apiKey (or (System/getenv "OPENAI_API_KEY") "fake-key-for-demo"))
-         (.modelName "gpt-4o-mini")
-         .build)))
+   {:api-key   (or (System/getenv "OPENAI_API_KEY") "fake-key-for-demo")
+    :model     "gpt-5-mini"
+    :reasoning {:effort :low}})
 
   ;; Create tools agent with our tool definitions
   (tools/new-tools-agent
@@ -113,13 +106,16 @@
              results     (atom [])]
 
          (doseq [^String prompt prompts]
-           ;; Send prompt to OpenAI model with tools
-           (let [response   (lc4j/chat model
-                                       (lc4j/chat-request
-                                        [(UserMessage. prompt)]
-                                        {:tools [CALCULATOR-TOOL STRING-TOOL]}))
-                 ai-message (.aiMessage response)
-                 tool-calls (vec (.toolExecutionRequests ai-message))]
+           ;; Send prompt to OpenAI model with tools. Frontier models happily
+           ;; do trivial arithmetic themselves, so the system prompt steers
+           ;; them to demonstrate tool calling instead.
+           (let [response   (model/chat
+                             model
+                             {:messages [(model/system
+                                          "When a request involves arithmetic or string manipulation, always use the provided tools rather than answering directly.")
+                                         (model/user prompt)]
+                              :tools    [CALCULATOR-TOOL STRING-TOOL]})
+                 tool-calls (:tool-calls response)]
 
              (if (seq tool-calls)
                ;; Execute tools and get results
@@ -130,7 +126,7 @@
                     :tool-results tool-results}))
                (swap! results conj
                  {:prompt     prompt
-                  :response   (.text ai-message)
+                  :response   (:text response)
                   :tool-calls 0}))))
 
          (aor/result! agent-node
@@ -163,10 +159,10 @@
         (if (> (:tool-calls prompt-result 0) 0)
           (do
             (println (format "    Tool calls: %d" (:tool-calls prompt-result)))
+            ;; Tool results are {:role :tool ...} messages; :content holds
+            ;; the tool's output
             (println "    Tool results:"
-                     (mapv
-                      #(.text ^ToolExecutionResultMessage %)
-                      (:tool-results prompt-result))))
+                     (mapv :content (:tool-results prompt-result))))
           (println "    Direct response:" (:response prompt-result)))))))
 
 (comment
