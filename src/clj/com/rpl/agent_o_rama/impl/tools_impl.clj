@@ -35,10 +35,17 @@
 
 (def MAPPER (j/object-mapper {:decode-key-fn str}))
 
+(defn spec-name
+  "Name of a tool specification — either a langchain4j ToolSpecification or
+  a plain data spec map (com.rpl.agent-o-rama.tools/tool)."
+  [tool-specification]
+  (if (map? tool-specification)
+    (:name tool-specification)
+    (.name ^ToolSpecification tool-specification)))
+
 (defn- mk-tools-by-name
   [tools]
-  (let [tools-by-name (group-by #(.name ^ToolSpecification
-                                        (:tool-specification %))
+  (let [tools-by-name (group-by #(spec-name (:tool-specification %))
                                 tools)
         invalid       (select [ALL
                                (selected? LAST (view count) (pred> 1))
@@ -55,13 +62,38 @@
         tool-names    (-> tools-by-name
                           keys
                           sort)]
-    (fn [agent-node ^ToolExecutionRequest request caller-data]
+    (fn [agent-node request caller-data]
+      ;; request is either a langchain4j ToolExecutionRequest or a neutral
+      ;; tool-call map {:id ... :name ... :args ...} (a response's :tool-calls
+      ;; entry from com.rpl.agent-o-rama.model/chat); the result emitted is a
+      ;; ToolExecutionResultMessage or a {:role :tool ...} map to match
       (let [start-time-millis (h/current-time-millis)
-            tool-name (.name request)
-            args      (-> request
-                          .arguments
-                          (j/read-value MAPPER))
-            base-info {"id"   (.id request)
+            native?    (map? request)
+            tool-name  (if native?
+                         (:name request)
+                         (.name ^ToolExecutionRequest request))
+            request-id (if native?
+                         (:id request)
+                         (.id ^ToolExecutionRequest request))
+            args       (if native?
+                         (let [args (:args request)]
+                           (if (string? args)
+                             (j/read-value ^String args MAPPER)
+                             args))
+                         (-> ^ToolExecutionRequest request
+                             .arguments
+                             (j/read-value MAPPER)))
+            mk-result  (if native?
+                         (fn [s]
+                           {:role         :tool
+                            :tool-call-id request-id
+                            :name         tool-name
+                            :content      (str s)})
+                         (fn [s]
+                           (ToolExecutionResultMessage/from
+                            ^ToolExecutionRequest request
+                            (str s))))
+            base-info {"id"   request-id
                        "name" tool-name
                        "args" args}]
         (try
@@ -79,7 +111,7 @@
                                                     "result" ret}))
               (c/emit! agent-node
                        "agg-results"
-                       (ToolExecutionResultMessage/from request (str ret))))
+                       (mk-result ret)))
 
             (do
               (anode/record-nested-op!-impl agent-node
@@ -89,8 +121,7 @@
                                             (assoc base-info "type" "invalid"))
               (c/emit! agent-node
                        "agg-results"
-                       (ToolExecutionResultMessage/from
-                        request
+                       (mk-result
                         (tool-invalid-error-string tool-name tool-names)))
             ))
           (catch Throwable t
@@ -98,7 +129,7 @@
               (let [error-ret (error-handler t)]
                 (c/emit! agent-node
                          "agg-results"
-                         (ToolExecutionResultMessage/from request error-ret))
+                         (mk-result error-ret))
                 (tl/warn ::tool-exec-error t "Tool execution exception")
                 (anode/record-nested-op!-impl
                  agent-node

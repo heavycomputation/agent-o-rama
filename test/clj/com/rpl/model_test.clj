@@ -8,6 +8,8 @@
    [com.rpl.agent-o-rama :as aor]
    [com.rpl.agent-o-rama.impl.pobjects :as po]
    [com.rpl.agent-o-rama.model :as m]
+   [com.rpl.agent-o-rama.schema :as schema]
+   [com.rpl.agent-o-rama.tools :as tools]
    [com.rpl.rama.test :as rtest])
   (:import
    [com.rpl.agentorama
@@ -322,4 +324,67 @@
               "args"     {"a" 1 "b" 2}}]
             (get (:info op) "toolRequests")))
      (is (= "tool-calls" (get (:info op) "finishReason")))
+    )))
+
+(deftest native-tools-agent-test
+  (with-open [ipc (rtest/create-ipc)]
+    (letlocals
+     (bind add-tool
+       (tools/tool
+        {:name        "add"
+         :description "Add two numbers"
+         :schema      (schema/object
+                       {:required ["a" "b"]}
+                       {"a" (schema/number "first number")
+                        "b" (schema/number "second number")})}
+        (fn [args] (+ (get args "a") (get args "b")))))
+     (bind context-tool
+       (tools/tool
+        {:name        "greet"
+         :description "Greet using agent context"
+         :schema      (schema/object {"who" (schema/string)})}
+        (fn [agent-node _caller-data args]
+          (str "hello " (get args "who")))
+        {:include-context? true}))
+     (bind module
+       (aor/agentmodule
+        [topology]
+        (tools/new-tools-agent topology "tools" [add-tool context-tool])
+        (->
+          topology
+          (aor/new-agent "foo")
+          (aor/node
+           "start"
+           nil
+           (fn [agent-node tool-calls]
+             (let [tools-agent (aor/agent-client agent-node "tools")]
+               (aor/result! agent-node
+                            (aor/agent-invoke tools-agent tool-calls))))))))
+     (launch-module-without-eval-agent! ipc module {:tasks 4 :threads 2})
+     (bind module-name (get-module-name module))
+     (bind agent-manager (aor/agent-manager ipc module-name))
+     (bind foo (aor/agent-client agent-manager "foo"))
+
+     ;; neutral tool-call maps in (a response's :tool-calls), neutral
+     ;; {:role :tool ...} messages out
+     (bind res
+       (sort-by :tool-call-id
+                (aor/agent-invoke
+                 foo
+                 [{:id "c1" :name "add" :args {"a" 1 "b" 2}}
+                  {:id "c2" :name "greet" :args {"who" "world"}}
+                  {:id "c3" :name "missing" :args {}}])))
+     (is (= [{:role         :tool
+              :tool-call-id "c1"
+              :name         "add"
+              :content      "3"}
+             {:role         :tool
+              :tool-call-id "c2"
+              :name         "greet"
+              :content      "hello world"}]
+            (take 2 res)))
+     (bind {:keys [content] :as invalid-res} (nth res 2))
+     (is (= "c3" (:tool-call-id invalid-res)))
+     (is (str/includes? content "missing is not a valid tool"))
+     (is (str/includes? content "add"))
     )))

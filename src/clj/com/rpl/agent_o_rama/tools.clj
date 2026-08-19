@@ -108,6 +108,59 @@ Example:\n
                                (:include-context? options))
    )))
 
+(defn tool
+  "Creates a complete tool definition from a plain-data spec and an
+  implementation function — the provider-neutral counterpart of
+  [[tool-specification]] + [[tool-info]], with no langchain4j involvement.\n
+\n
+Tools created this way work with [[new-tools-agent]] and with native model
+integrations (the :tools request key of com.rpl.agent-o-rama.model/chat).
+When invoked through a tools agent, requests are neutral tool-call maps
+{:id ... :name ... :args ...} (a response's :tool-calls entries) and results
+are {:role :tool ...} messages ready to append to the conversation.\n
+\n
+Args:\n
+  - spec - Map describing the tool interface:
+    - :name - String tool name (required, unique within a tools agent)
+    - :description - String description of what the tool does
+    - :schema - JSON schema map for the parameters (see com.rpl.agent-o-rama.schema)
+    - :strict? - Boolean, provider strict-mode flag where supported
+  - tool-fn - Function implementing the tool. Takes either:
+    - (args) - Just the parsed arguments map
+    - (agent-node caller-data args) - Agent node, caller data, and arguments
+  - options - Optional map with configuration:
+    - :include-context? - Boolean, whether to pass agent-node and caller-data to tool-fn (default false)
+\n
+Returns:\n
+  - ToolInfo - Complete tool definition for use with [[new-tools-agent]]\n
+\n
+Example:\n
+<pre>
+(tool
+  {:name        \"add\"
+   :description \"Add two numbers together\"
+   :schema      (schema/object
+                 {:required [\"a\" \"b\"]}
+                 {\"a\" (schema/number \"first number\")
+                  \"b\" (schema/number \"second number\")})}
+  (fn [args] (+ (get args \"a\") (get args \"b\"))))
+</pre>"
+  ([spec tool-fn]
+   (tool spec tool-fn nil))
+  ([spec tool-fn options]
+   (let [options (merge {:include-context? false} options)]
+     (h/validate-options! spec
+                          options
+                          {:include-context? h/boolean-spec})
+     (when-not (and (map? spec) (string? (:name spec)))
+       (throw (h/ex-info "Invalid tool spec — must be a map with a :name string"
+                         {:spec spec})))
+     (when-not (ifn? tool-fn)
+       (throw (h/ex-info "Invalid tool function" {:type (class tool-fn)})))
+     (aor-types/->ToolInfoImpl spec
+                               tool-fn
+                               (:include-context? options)))))
+
 (defn error-handler-static-string
   "Creates an error handler that always returns a static string for any exception.\n
 \n

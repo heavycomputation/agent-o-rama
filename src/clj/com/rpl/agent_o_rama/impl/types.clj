@@ -406,7 +406,10 @@
    key :- s/Any])
 
 (defaorrecord ToolInfoImpl
-  [tool-specification :- ToolSpecification
+  ;; tool-specification is either a langchain4j ToolSpecification or a plain
+  ;; data spec map {:name ... :description ... :schema ...} (created with
+  ;; com.rpl.agent-o-rama.tools/tool)
+  [tool-specification :- (s/cond-pre ToolSpecification {s/Keyword s/Any})
    tool-fn :- clojure.lang.IFn
    include-context? :- Boolean]
   ToolInfo
