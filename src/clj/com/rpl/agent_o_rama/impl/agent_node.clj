@@ -6,7 +6,9 @@
    [com.rpl.agent-o-rama.impl.client :as iclient]
    [com.rpl.agent-o-rama.impl.helpers :as h]
    [com.rpl.agent-o-rama.impl.langchain4j-trace :as lc4j-trace]
+   [com.rpl.agent-o-rama.impl.model-trace :as model-trace]
    [com.rpl.agent-o-rama.impl.partitioner :as apart]
+   [com.rpl.agent-o-rama.model :as model]
    [com.rpl.agent-o-rama.impl.pobjects :as po]
    [com.rpl.agent-o-rama.impl.store-impl :as simpl]
    [com.rpl.agent-o-rama.impl.types :as aor-types]
@@ -767,6 +769,85 @@
         (throw t))
     )))
 
+(defn- record-provider-call!
+  [name info agent-node request response start-time-millis
+   first-token-time-millis]
+  (let [{:keys [usage finish-reason]} response]
+    (record-nested-op!-impl
+     agent-node
+     :model-call
+     start-time-millis
+     (h/current-time-millis)
+     (h/remove-empty-vals
+      {"objectName"           name
+       "provider"             (some-> (:provider info) clojure.core/name)
+       "modelName"            (or (:model response)
+                                  (:model request)
+                                  (:model info))
+       "temperature"          (:temperature request)
+       "topK"                 (:top-k request)
+       "topP"                 (:top-p request)
+       "stopSequences"        (some-> (:stop-sequences request) vec)
+       "maxOutputTokens"      (:max-output-tokens request)
+       "input"                (model-trace/messages->trace
+                               (:messages request))
+       "response"             (:text response)
+       "toolRequests"         (model-trace/tool-calls->trace
+                               (:tool-calls response))
+       "finishReason"         (model-trace/finish-reason->trace finish-reason)
+       "inputTokenCount"      (:input-tokens usage)
+       "outputTokenCount"     (:output-tokens usage)
+       "totalTokenCount"      (:total-tokens usage)
+       "reasoningTokenCount"  (:reasoning-tokens usage)
+       "firstTokenTimeMillis" first-token-time-millis}))))
+
+(defn- record-provider-failure!
+  [name agent-node request start-time-millis t]
+  (record-nested-op!-impl
+   agent-node
+   :model-call
+   start-time-millis
+   (h/current-time-millis)
+   {"objectName" name
+    "input"      (model-trace/messages->trace (:messages request))
+    "failure"    (h/throwable->str t)}))
+
+(defn- instrument-provider-chat!
+  [name info provider request]
+  (let [^AgentNode agent-node (h/thread-local-get AGENT-NODE-CONTEXT)
+        start-time-millis     (h/current-time-millis)]
+    (try
+      (let [response (model/-chat provider request)]
+        (record-provider-call! name info agent-node request response
+                               start-time-millis nil)
+        response)
+      (catch Throwable t
+        (record-provider-failure! name agent-node request start-time-millis t)
+        (throw t)))))
+
+(defn- instrument-provider-stream-chat!
+  [name info provider request on-delta]
+  (let [^AgentNode agent-node   (h/thread-local-get AGENT-NODE-CONTEXT)
+        start-time-millis       (h/current-time-millis)
+        first-token-time-millis (atom nil)
+        handle-delta
+        (fn [delta]
+          (swap! first-token-time-millis
+                 (fn [v] (or v (h/current-time-millis))))
+          (when agent-node
+            (when-some [text (model/delta-text delta)]
+              (.streamChunk agent-node text)))
+          (when on-delta
+            (on-delta delta)))]
+    (try
+      (let [response (model/-stream-chat provider request handle-delta)]
+        (record-provider-call! name info agent-node request response
+                               start-time-millis @first-token-time-millis)
+        response)
+      (catch Throwable t
+        (record-provider-failure! name agent-node request start-time-millis t)
+        (throw t)))))
+
 (defmacro with-traced
   [expr object-name nested-op-type [res-sym] & body]
   `(let [agent-node#        (h/thread-local-get AGENT-NODE-CONTEXT)
@@ -786,6 +867,25 @@
 (defn wrap-agent-object
   [name obj]
   (cond
+    ;; native provider integrations: anything satisfying the provider-neutral
+    ;; ChatProvider protocol is instrumented for tracing + streaming
+    (satisfies? model/ChatProvider obj)
+    (let [info (model/-provider-info obj)]
+      (reify
+       model/ChatProvider
+       (-chat [this request]
+         (instrument-provider-chat! name info obj request))
+       (-stream-chat [this request on-delta]
+         (instrument-provider-stream-chat! name info obj request on-delta))
+       (-provider-info [this]
+         (model/-provider-info obj))
+
+       IUnderlying
+       (getUnderlying [this] obj)
+
+       Closeable
+       (close [this] (try-close! obj))))
+
     (instance? ChatModel obj)
     (let [^ChatModel obj obj]
       (reify

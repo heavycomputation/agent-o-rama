@@ -108,6 +108,7 @@
           :namespaces   [com.rpl.agent-o-rama
                          com.rpl.agent-o-rama.langchain4j
                          com.rpl.agent-o-rama.langchain4j.json
+                         com.rpl.agent-o-rama.model
                          com.rpl.agent-o-rama.store
                          com.rpl.agent-o-rama.throttled-logging
                          com.rpl.agent-o-rama.tools]}
