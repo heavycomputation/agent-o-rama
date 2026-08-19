@@ -16,29 +16,13 @@
   (:require
    [clojure.string :as str]
    [com.rpl.agent-o-rama.impl.helpers :as h]
-   [com.rpl.agent-o-rama.model :as model]
-   [jsonista.core :as j])
+   [com.rpl.agent-o-rama.impl.model-http :as mhttp]
+   [com.rpl.agent-o-rama.model :as model])
   (:import
-   [java.net URI]
-   [java.net.http
-    HttpClient
-    HttpRequest
-    HttpRequest$BodyPublishers
-    HttpResponse
-    HttpResponse$BodyHandlers]
-   [java.time Duration]
-   [java.util Base64]
-   [java.util.stream Stream]))
+   [java.util Base64]))
 
-(def MAPPER (j/object-mapper {:decode-key-fn str}))
-
-(defn- json-encode
-  ^String [x]
-  (j/write-value-as-string x))
-
-(defn- json-decode
-  [^String s]
-  (j/read-value s MAPPER))
+(def ^:private json-encode mhttp/json-encode)
+(def ^:private json-decode mhttp/json-decode)
 
 ;;; ---------------------------------------------------------------------------
 ;;; request translation: neutral -> wire
@@ -170,8 +154,7 @@
   config; per-request keys win."
   [{default-model :model
     default-reasoning :reasoning
-    default-store? :store?
-    :as defaults}
+    default-store? :store?}
    request]
   (let [reasoning (if (contains? request :reasoning)
                     (:reasoning request)
@@ -305,40 +288,37 @@
   [lines on-event]
   (let [final (volatile! nil)
         error (volatile! nil)]
-    (doseq [^String line lines]
-      (when (str/starts-with? line "data:")
-        (let [payload (str/trim (subs line 5))]
-          (when-not (= "[DONE]" payload)
-            (let [event      (json-decode payload)
-                  event-type (get event "type")]
-              (case event-type
-                "response.output_text.delta"
-                (on-event {:type :text-delta
-                           :text (get event "delta")})
+    (mhttp/each-sse-payload
+     lines
+     (fn [event]
+       (case (get event "type")
+         "response.output_text.delta"
+         (on-event {:type :text-delta
+                    :text (get event "delta")})
 
-                "response.reasoning_summary_text.delta"
-                (on-event {:type :reasoning-delta
-                           :text (get event "delta")})
+         "response.reasoning_summary_text.delta"
+         (on-event {:type :reasoning-delta
+                    :text (get event "delta")})
 
-                "response.function_call_arguments.delta"
-                (on-event {:type :tool-call-delta
-                           :text (get event "delta")})
+         "response.function_call_arguments.delta"
+         (on-event {:type :tool-call-delta
+                    :text (get event "delta")})
 
-                "response.refusal.delta"
-                (on-event {:type :refusal-delta
-                           :text (get event "delta")})
+         "response.refusal.delta"
+         (on-event {:type :refusal-delta
+                    :text (get event "delta")})
 
-                ("response.completed" "response.incomplete")
-                (vreset! final (get event "response"))
+         ("response.completed" "response.incomplete")
+         (vreset! final (get event "response"))
 
-                "response.failed"
-                (vreset! error (or (get-in event ["response" "error"])
-                                   event))
+         "response.failed"
+         (vreset! error (or (get-in event ["response" "error"])
+                            event))
 
-                "error"
-                (vreset! error event)
+         "error"
+         (vreset! error event)
 
-                nil))))))
+         nil)))
     (when @error
       (throw (h/ex-info "OpenAI streaming request failed" {:error @error})))
     (when-not @final
@@ -349,51 +329,23 @@
 ;;; HTTP transport
 ;;; ---------------------------------------------------------------------------
 
-(defn- http-request
-  ^HttpRequest [{:keys [base-url api-key timeout-ms]} body]
-  (-> (HttpRequest/newBuilder (URI/create (str base-url "/responses")))
-      (.timeout (Duration/ofMillis timeout-ms))
-      (.header "Authorization" (str "Bearer " api-key))
-      (.header "Content-Type" "application/json")
-      (.POST (HttpRequest$BodyPublishers/ofString (json-encode body)))
-      .build))
-
-(defn- request-failed
-  [status body]
-  (h/ex-info "OpenAI request failed"
-             {:status status
-              :error  (try
-                        (get (json-decode body) "error")
-                        (catch Exception _ body))}))
+(defn- endpoint
+  [{:keys [base-url api-key timeout-ms]}]
+  {:provider   :openai
+   :url        (str base-url "/responses")
+   :headers    {"Authorization" (str "Bearer " api-key)}
+   :timeout-ms timeout-ms})
 
 (defn chat-http
   "Synchronous Responses API call. Returns the response object (wire format)."
-  [{:keys [^HttpClient client] :as config} wire-request]
-  (let [^HttpResponse resp (.send client
-                                  (http-request config wire-request)
-                                  (HttpResponse$BodyHandlers/ofString))]
-    (if (<= 200 (.statusCode resp) 299)
-      (json-decode (.body resp))
-      (throw (request-failed (.statusCode resp) (.body resp))))))
+  [{:keys [client] :as config} wire-request]
+  (mhttp/post-json client (endpoint config) wire-request))
 
 (defn stream-chat-http
   "Streaming Responses API call. Invokes on-event with neutral delta events
   as SSE events arrive; returns the final response object (wire format)."
-  [{:keys [^HttpClient client] :as config} wire-request on-event]
-  (let [^HttpResponse resp (.send client
-                                  (http-request config
-                                                (assoc wire-request
-                                                       "stream" true))
-                                  (HttpResponse$BodyHandlers/ofLines))
-        lines (iterator-seq (.iterator ^Stream (.body resp)))]
-    (if (<= 200 (.statusCode resp) 299)
-      (process-sse-lines lines on-event)
-      (throw (request-failed (.statusCode resp)
-                             (str/join "\n" lines))))))
-
-(defn mk-http-client
-  ^HttpClient [{:keys [connect-timeout-ms]
-                :or   {connect-timeout-ms 10000}}]
-  (-> (HttpClient/newBuilder)
-      (.connectTimeout (Duration/ofMillis connect-timeout-ms))
-      .build))
+  [{:keys [client] :as config} wire-request on-event]
+  (mhttp/post-json-sse client
+                       (endpoint config)
+                       (assoc wire-request "stream" true)
+                       #(process-sse-lines % on-event)))

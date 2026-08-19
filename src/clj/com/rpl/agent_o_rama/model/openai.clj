@@ -31,6 +31,7 @@
   (:require
    [com.rpl.agent-o-rama :as aor]
    [com.rpl.agent-o-rama.impl.helpers :as h]
+   [com.rpl.agent-o-rama.impl.model-http :as mhttp]
    [com.rpl.agent-o-rama.impl.openai :as iopenai]
    [com.rpl.agent-o-rama.model :as model])
   (:import
@@ -73,7 +74,7 @@
         config   {:api-key    api-key
                   :base-url   (or base-url "https://api.openai.com/v1")
                   :timeout-ms (or timeout-ms 600000)
-                  :client     (iopenai/mk-http-client opts)}
+                  :client     (mhttp/mk-client opts)}
         defaults {:model     model
                   :reasoning reasoning
                   :store?    (if (contains? opts :store?) store? false)}]
@@ -96,9 +97,7 @@
 
      Closeable
      (close [this]
-       (let [client (:client config)]
-         (when (instance? java.lang.AutoCloseable client)
-           (.close ^java.lang.AutoCloseable client)))))))
+       (mhttp/close-client! (:client config))))))
 
 (defn declare-model
   "Declares a [[responses-model]] as an auto-traced agent object named

@@ -109,7 +109,9 @@
                          com.rpl.agent-o-rama.langchain4j
                          com.rpl.agent-o-rama.langchain4j.json
                          com.rpl.agent-o-rama.model
+                         com.rpl.agent-o-rama.model.anthropic
                          com.rpl.agent-o-rama.model.openai
+                         com.rpl.agent-o-rama.model.xai
                          com.rpl.agent-o-rama.schema
                          com.rpl.agent-o-rama.store
                          com.rpl.agent-o-rama.throttled-logging
