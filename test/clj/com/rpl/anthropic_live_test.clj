@@ -121,3 +121,42 @@
        (is (vector? chunks))
        (is (= res (apply str chunks)))
       ))))
+
+(deftest anthropic-structured-output-test
+  (when (some? (System/getenv "ANTHROPIC_API_KEY"))
+    (with-open [ipc (rtest/create-ipc)]
+      (letlocals
+       (bind module
+         (aor/agentmodule
+          [topology]
+          (anthropic/declare-model topology
+                                   "claude"
+                                   {:model      MODEL
+                                    :max-tokens 1024})
+          (->
+            topology
+            (aor/new-agent "foo")
+            (aor/node
+             "chat"
+             nil
+             (fn [agent-node ^String prompt]
+               (let [model (aor/get-agent-object agent-node "claude")
+                     res   (m/chat
+                            model
+                            {:messages      [(m/user prompt)]
+                             :output-schema {:schema (schema/strict-object
+                                                      {"result"      (schema/number
+                                                                      "The numeric result")
+                                                       "explanation" (schema/string
+                                                                      "One-sentence explanation")})}})]
+                 (aor/result! agent-node (:parsed res))))))))
+       (launch-module-without-eval-agent! ipc module {:tasks 4 :threads 2})
+       (bind module-name (get-module-name module))
+       (bind agent-manager (aor/agent-manager ipc module-name))
+       (bind foo (aor/agent-client agent-manager "foo"))
+
+       (bind parsed (aor/agent-invoke foo "What is 5 times 5?"))
+       (is (map? parsed))
+       (is (== 25 (get parsed "result")))
+       (is (string? (get parsed "explanation")))
+      ))))
