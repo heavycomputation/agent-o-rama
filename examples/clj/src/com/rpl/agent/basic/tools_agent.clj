@@ -3,8 +3,8 @@
 
   Features demonstrated:
   - new-tools-agent: Create specialized agent for tool execution
-  - tools/tool: Define tool specs (name, description, JSON schema) plus
-    implementation functions
+  - tools/deftool: Define a tool — name, description, JSON schema and
+    implementation — in one form
   - OpenAI model with tool calling capabilities
   - Natural language to tool execution workflow"
   (:require
@@ -17,61 +17,35 @@
    [com.rpl.rama :as rama]
    [com.rpl.rama.test :as rtest]))
 
-;;; Tool function definitions
-(defn calculate-tool
-  "Simple calculator tool that performs basic arithmetic"
-  [args]
-  (let [operation (args "operation")
-        a         (args "a")
-        b         (args "b")
-        result    (case operation
-                    "add" (+ a b)
-                    "subtract" (- a b)
-                    "multiply" (* a b)
-                    "divide" (if (zero? b)
-                               "Error: Division by zero"
-                               (/ a b))
-                    "Error: Unknown operation")]
-    (str result)))
+;;; Tool definitions. deftool declares the spec (name, description, JSON
+;;; schema) and the implementation together; parameters are bound from the
+;;; model's arguments by name.
+(tools/deftool calculator
+  "Performs basic arithmetic operations on two numbers"
+  [operation (schema/enum "The arithmetic operation to perform"
+                          ["add" "subtract" "multiply" "divide"])
+   a         (schema/number "The first number")
+   b         (schema/number "The second number")]
+  (str (case operation
+         "add"      (+ a b)
+         "subtract" (- a b)
+         "multiply" (* a b)
+         "divide"   (if (zero? b)
+                      "Error: Division by zero"
+                      (/ a b))
+         "Error: Unknown operation")))
 
-(defn string-tool
-  "String manipulation tool for text processing"
-  [args]
-  (let [text      (args "text")
-        operation (args "operation")]
-    (case operation
-      "uppercase" (str/upper-case text)
-      "lowercase" (str/lower-case text)
-      "reverse" (str/reverse text)
-      "length" (str (count text))
-      "Error: Unknown string operation")))
-
-;;; Tool definitions: plain-data spec (name, description, JSON schema) plus
-;;; implementation function
-(def CALCULATOR-TOOL
-  (tools/tool
-   {:name        "calculator"
-    :description "Performs basic arithmetic operations on two numbers"
-    :schema      (schema/object
-                  {:description "Parameters for calculator operations"
-                   :required    ["operation" "a" "b"]}
-                  {"operation" (schema/enum "The arithmetic operation to perform"
-                                            ["add" "subtract" "multiply" "divide"])
-                   "a"         (schema/number "The first number")
-                   "b"         (schema/number "The second number")})}
-   calculate-tool))
-
-(def STRING-TOOL
-  (tools/tool
-   {:name        "string-processor"
-    :description "Performs string manipulation operations"
-    :schema      (schema/object
-                  {:description "Parameters for string manipulation operations"
-                   :required    ["text" "operation"]}
-                  {"text"      (schema/string "The text to process")
-                   "operation" (schema/enum "The string operation to perform"
-                                            ["uppercase" "lowercase" "reverse" "length"])})}
-   string-tool))
+(tools/deftool string-processor
+  "Performs string manipulation operations"
+  [text      (schema/string "The text to process")
+   operation (schema/enum "The string operation to perform"
+                          ["uppercase" "lowercase" "reverse" "length"])]
+  (case operation
+    "uppercase" (str/upper-case text)
+    "lowercase" (str/lower-case text)
+    "reverse"   (str/reverse text)
+    "length"    (str (count text))
+    "Error: Unknown string operation"))
 
 ;;; Agent module demonstrating tools functionality
 (aor/defagentmodule ToolsAgentModule
@@ -89,7 +63,7 @@
   (tools/new-tools-agent
    topology
    "ToolsAgent"
-   [CALCULATOR-TOOL STRING-TOOL])
+   [calculator string-processor])
 
   ;; Create a coordinator agent that uses OpenAI with tools
   (->
@@ -114,7 +88,7 @@
                              {:messages [(model/system
                                           "When a request involves arithmetic or string manipulation, always use the provided tools rather than answering directly.")
                                          (model/user prompt)]
-                              :tools    [CALCULATOR-TOOL STRING-TOOL]})
+                              :tools    [calculator string-processor]})
                  tool-calls (:tool-calls response)]
 
              (if (seq tool-calls)

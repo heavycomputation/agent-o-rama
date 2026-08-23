@@ -5,10 +5,22 @@ This namespace provides utilities for defining tools and tool agents for use wit
 \n
 Key concepts:\n
   - A tool is defined with [[tool]]: a plain-data spec (name, description, JSON schema for parameters) plus an implementation function
+  - [[deftool]] is sugar for the common case, declaring the spec and the implementation in one form
   - Tool agents ([[new-tools-agent]]) execute the tool calls requested by AI models and return results
   - Error handlers control how tool execution failures are handled
 \n
 Example:\n
+<pre>
+(deftool add
+  \"Add two numbers together\"
+  [a (schema/number \"first number\")
+   b (schema/number \"second number\")]
+  (+ a b))
+(new-tools-agent topology \"calculator\" [add])
+</pre>
+\n
+[[deftool]] expands to [[tool]], which is what to reach for when tools are
+built at runtime rather than at the top level:\n
 <pre>
 (def calculator-tool
   (tool
@@ -19,7 +31,6 @@ Example:\n
                    {\"a\" (schema/number \"first number\")
                     \"b\" (schema/number \"second number\")})}
     (fn [args] (+ (get args \"a\") (get args \"b\")))))
-(new-tools-agent topology \"calculator\" [calculator-tool])
 </pre>"
   (:use [com.rpl.rama]
         [com.rpl.rama.path])
@@ -28,6 +39,7 @@ Example:\n
    [com.rpl.agent-o-rama.impl.helpers :as h]
    [com.rpl.agent-o-rama.impl.tools-impl :as tools-impl]
    [com.rpl.agent-o-rama.impl.types :as aor-types]
+   [com.rpl.agent-o-rama.schema :as schema]
    [com.rpl.rama.aggs :as aggs]))
 
 (defn tool
@@ -55,6 +67,10 @@ Args:\n
 Returns:\n
   - ToolInfo - Complete tool definition for use with [[new-tools-agent]]\n
 \n
+See also [[deftool]], which declares the spec and the implementation in one
+form. Use this function directly for tools built at runtime — from config, a
+database, or another service's tool list.\n
+\n
 Example:\n
 <pre>
 (tool
@@ -81,6 +97,218 @@ Example:\n
      (aor-types/->ToolInfoImpl spec
                                tool-fn
                                (:include-context? options)))))
+
+;; -- deftool ----------------------------------------------------------------
+;;
+;; deftool is pure syntax over [[tool]]: it expands to
+;; (def <name> (tool <spec-map> <fn> <options>)) and introduces no runtime
+;; concepts of its own. [[tool]] remains the primitive, and is still the way
+;; to build tools dynamically (from config, a database, an MCP server's tool
+;; list, ...).
+
+(def ^:private DEFTOOL-OPTIONS
+  #{:name :description :schema :strict? :additional-properties :context :as})
+
+(defn- deftool-throw!
+  [tool-name msg data]
+  (throw (h/ex-info (str "deftool " tool-name ": " msg)
+                    (assoc data :tool-name tool-name))))
+
+(defn- deftool-param-key
+  "The JSON argument name for a parameter symbol: its ^{:key \"...\"} metadata
+  if present, otherwise the symbol's name."
+  [tool-name sym]
+  (let [k (:key (meta sym))]
+    (cond
+      (nil? k)    (clojure.core/name sym)
+      (string? k) k
+      :else       (deftool-throw! tool-name
+                                  "parameter :key metadata must be a string"
+                                  {:param sym :key k}))))
+
+(defn- deftool-parse-params
+  [tool-name params]
+  (when-not (vector? params)
+    (deftool-throw! tool-name
+                    "expects a parameter vector of name/schema pairs"
+                    {:params params}))
+  (when (odd? (count params))
+    (deftool-throw! tool-name
+                    "parameter vector must contain name/schema pairs"
+                    {:params params}))
+  (let [parsed (mapv
+                (fn [[sym schema]]
+                  (when-not (simple-symbol? sym)
+                    (deftool-throw! tool-name
+                                    "parameter names must be simple symbols"
+                                    {:param sym}))
+                  ;; only the metadata deftool consumes is stripped; the
+                  ;; rest (type hints, say) rides along to the binding
+                  {:sym       (vary-meta sym dissoc :optional :key)
+                   :key       (deftool-param-key tool-name sym)
+                   :schema    schema
+                   :optional? (clojure.core/boolean (:optional (meta sym)))})
+                (partition 2 params))
+        dupes  (->> parsed
+                    (mapv :key)
+                    frequencies
+                    (filterv (fn [[_ n]] (> n 1)))
+                    (mapv first))]
+    (when (seq dupes)
+      (deftool-throw! tool-name
+                      "duplicate parameter names"
+                      {:duplicates dupes}))
+    parsed))
+
+(defn- deftool-check-bindings!
+  [tool-name param-syms context as-sym]
+  (let [all   (concat param-syms context (when as-sym [as-sym]))
+        dupes (->> all
+                   frequencies
+                   (filterv (fn [[_ n]] (> n 1)))
+                   (mapv first))]
+    (when (seq dupes)
+      (deftool-throw! tool-name
+                      "conflicting binding names"
+                      {:conflicting (vec dupes)}))))
+
+(defmacro deftool
+  "Defines a tool as a var, in one form.\n
+\n
+This is sugar over [[tool]]: it expands to
+`(def <name> (tool <spec-map> <fn> <options>))`, so what you get is an
+ordinary ToolInfo, identical to one built by hand. Parameters are declared
+once — as name/schema pairs — and are bound in the body, destructured out of
+the JSON argument map by name.\n
+\n
+Args:\n
+  - name - Symbol to def. Also the tool's name as seen by the model, unless
+    the :name option overrides it
+  - docstring - Optional string; becomes the tool's :description (and the
+    var's docstring)
+  - options - Optional map:
+    - :name - String tool name, overriding the var name
+    - :description - String description, overriding the docstring
+    - :schema - Full parameter schema, replacing the one built from the
+      parameter vector (parameters are still destructured from the arguments)
+    - :strict? - Boolean, provider strict-mode flag where supported. Strict
+      modes also require closed objects, so pass
+      :additional-properties false alongside it
+    - :additional-properties - Boolean, passed to
+      com.rpl.agent-o-rama.schema/object
+    - :context - Vector of two symbols, e.g. [agent-node caller-data], bound
+      to the agent node and caller data. Supplying it sets :include-context?
+    - :as - Symbol bound to the whole (string-keyed) argument map
+  - params - Vector of name/schema pairs. Every parameter is required unless
+    tagged ^:optional. Tag a parameter with ^{:key \"...\"} when the JSON
+    argument name isn't a valid Clojure symbol. Any other metadata, such as a
+    type hint, passes through to the binding
+  - body - Tool implementation; its value is returned to the model\n
+\n
+Example:\n
+<pre>
+(deftool compound-interest
+  \"Computes the final balance for principal p at annual rate r (percent)
+   compounded yearly for n years\"
+  [p (schema/number \"Principal amount\")
+   r (schema/number \"Annual interest rate in percent\")
+   n (schema/integer \"Number of years\")]
+  (format \"%.2f\" (* p (Math/pow (+ 1.0 (/ r 100.0)) n))))
+</pre>
+\n
+With agent context, an optional parameter, and a name the model sees
+differently from the var:\n
+<pre>
+(deftool search-flights
+  \"Search for available flights between airports\"
+  {:name    \"search_flights\"
+   :context [agent-node caller-data]}
+  [departure-airport        (schema/string \"3-letter departure airport code\")
+   arrival-airport          (schema/string \"3-letter arrival airport code\")
+   ^:optional start-date    (schema/string \"Earliest departure date (YYYY-MM-DD)\")]
+  (search (aor/get-store agent-node \"$$flights\")
+          departure-airport
+          arrival-airport
+          start-date))
+</pre>
+\n
+Tools built at runtime, rather than at the top level, use [[tool]] directly."
+  {:arglists '([name docstring? options? params & body])}
+  [tool-name & args]
+  (when-not (simple-symbol? tool-name)
+    (throw (h/ex-info "deftool expects a simple symbol name"
+                      {:name tool-name})))
+  (let [[docstring args] (if (string? (first args))
+                           [(first args) (next args)]
+                           [nil args])
+        [options args]   (if (map? (first args))
+                           [(first args) (next args)]
+                           [nil args])
+        params           (first args)
+        body             (next args)
+        invalid          (remove DEFTOOL-OPTIONS (clojure.core/keys options))]
+    (when (seq invalid)
+      (deftool-throw! tool-name
+                      "invalid options"
+                      {:invalid (vec invalid)
+                       :allowed (vec (sort DEFTOOL-OPTIONS))}))
+    (when (empty? body)
+      (deftool-throw! tool-name "requires a body" {}))
+    (let [parsed  (deftool-parse-params tool-name params)
+          context (:context options)
+          as-sym  (:as options)]
+      (when (and (some? context)
+                 (not (and (vector? context)
+                           (= 2 (count context))
+                           (every? simple-symbol? context))))
+        (deftool-throw!
+         tool-name
+         "the :context option must be a vector of two symbols, e.g. [agent-node caller-data]"
+         {:context context}))
+      (when (and (some? as-sym) (not (simple-symbol? as-sym)))
+        (deftool-throw! tool-name
+                        "the :as option must be a simple symbol"
+                        {:as as-sym}))
+      (deftool-check-bindings! tool-name (mapv :sym parsed) context as-sym)
+      (let [args-sym  (or as-sym (gensym "args"))
+            required  (->> parsed
+                           (remove :optional?)
+                           (mapv :key))
+            schema    (if (contains? options :schema)
+                        (:schema options)
+                        `(schema/object
+                          ~(cond-> {}
+                             (seq required)
+                             (assoc :required required)
+                             (contains? options :additional-properties)
+                             (assoc :additional-properties
+                                    (:additional-properties options)))
+                          ;; array-map so properties keep declaration order,
+                          ;; whatever the parameter count
+                          (array-map ~@(mapcat (juxt :key :schema) parsed))))
+            spec      (cond-> {:name   (if (contains? options :name)
+                                          (:name options)
+                                          (clojure.core/name tool-name))
+                               :schema schema}
+                        (or (:description options) docstring)
+                        (assoc :description (or (:description options)
+                                                docstring))
+                        (contains? options :strict?)
+                        (assoc :strict? (:strict? options)))
+            bindings  (into []
+                            (mapcat (fn [{:keys [sym key]}]
+                                      [sym `(get ~args-sym ~key)]))
+                            parsed)
+            fn-name   (symbol (str tool-name "-tool-fn"))
+            fn-form   (if context
+                        `(fn ~fn-name [~(first context) ~(second context) ~args-sym]
+                           (let ~bindings ~@body))
+                        `(fn ~fn-name [~args-sym]
+                           (let ~bindings ~@body)))]
+        `(def ~tool-name
+           ~@(when docstring [docstring])
+           (tool ~spec ~fn-form ~(when context {:include-context? true})))
+      ))))
 
 (defn error-handler-static-string
   "Creates an error handler that always returns a static string for any exception.\n

@@ -1,3 +1,7 @@
 {:lint-as
  {com.rpl.agent-o-rama/defagentmodule clojure.core/defn
-  com.rpl.agent-o-rama/agentmodule clojure.core/fn}}
+  com.rpl.agent-o-rama/agentmodule clojure.core/fn}
+ :hooks
+ {:analyze-call
+  {com.rpl.agent-o-rama.tools/deftool
+   hooks.com.rpl.agent-o-rama.tools/deftool}}}

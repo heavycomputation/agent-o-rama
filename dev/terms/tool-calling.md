@@ -18,8 +18,9 @@ Enables AI-driven external system interaction. Provides structured interface for
 - Error propagation
 
 ## Key Clojure API
-- Primary functions: `tool-specification`, `tool-info`, `new-tools-agent`
-- Creation: `(tool-specification name description params)`
+- Primary functions: `tools/deftool`, `tools/tool`, `new-tools-agent`
+- Creation: `(deftool name docstring? options? params & body)`, or
+  `(tool spec tool-fn [options])` for tools built at runtime
 - Access: `src/clj/com/rpl/agent_o_rama/tools.clj`
 
 ## Key Java API

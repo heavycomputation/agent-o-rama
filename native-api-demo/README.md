@@ -86,7 +86,9 @@ neutral message format carries reasoning/tool blocks as data the UI can render.
 - `com.rpl.agent-o-rama.schema` — JSON-schema helpers producing plain maps
   (replaces `com.rpl.agent-o-rama.langchain4j.json`).
 - `com.rpl.agent-o-rama.tools` — same graph machinery, but `tool` takes a data map +
-  fn; tool results are plain maps.
+  fn; tool results are plain maps. `deftool` is sugar over `tool`: it declares the
+  spec and the implementation in one form and binds the model's arguments as
+  parameters, expanding to `(def <name> (tool <spec> <fn> <options>))`.
 
 **Tracing/streaming stay automatic.** `declare-agent-object-builder` still auto-wraps:
 the fork's `wrap-agent-object` dispatches on `(satisfies? ChatProvider obj)` instead of
