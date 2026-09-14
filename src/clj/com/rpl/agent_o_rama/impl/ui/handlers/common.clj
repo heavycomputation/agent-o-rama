@@ -1,3 +1,4 @@
+;; Modified by Heavy Computation in 2026 as part of its Agent-o-rama fork.
 (ns com.rpl.agent-o-rama.impl.ui.handlers.common
   (:use [com.rpl.rama]
         [com.rpl.rama.path])

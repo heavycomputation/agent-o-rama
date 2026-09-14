@@ -1,3 +1,4 @@
+;; Modified by Heavy Computation in 2026 as part of its Agent-o-rama fork.
 (ns com.rpl.agent-o-rama.impl.types
   (:use [com.rpl.rama.path])
   (:require

@@ -245,13 +245,3 @@
        (iopenai/process-sse-lines
         ["data: {\"type\":\"response.output_text.delta\",\"delta\":\"x\"}"]
         (fn [_])))))
-
-(deftest lc4j-tool-rejected-test
-  ;; lc4j ToolSpecification-based tools get a clear error from the native
-  ;; adapter rather than a confusing one
-  (is (thrown-with-msg?
-       Exception #"use com.rpl.agent-o-rama.tools/tool"
-       (iopenai/tool->wire
-        (tools/tool-info
-         (tools/tool-specification "add" nil "Add")
-         (fn [args] args))))))

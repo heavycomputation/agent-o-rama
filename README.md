@@ -1,6 +1,6 @@
-# Agent-o-rama
+# Agent-o-rama — Heavy Computation fork
 
-> **Fork notice**: This is a fork of [redplanetlabs/agent-o-rama](https://github.com/redplanetlabs/agent-o-rama) that removes the LangChain4j integration entirely in favor of native, first-class LLM provider integrations (OpenAI Responses API, Anthropic Messages API, xAI) built on a provider-neutral `ChatProvider` protocol. Messages, tool definitions, and schemas are plain Clojure data. See the `com.rpl.agent-o-rama.model*`, `com.rpl.agent-o-rama.schema`, and `com.rpl.agent-o-rama.tools` namespaces. The Java examples have been removed; the Clojure API is the primary interface.
+> **Unofficial fork:** This project is maintained by [Heavy Computation](https://heavycomputation.com/) and is not an official Red Planet Labs release. It is derived from [redplanetlabs/agent-o-rama](https://github.com/redplanetlabs/agent-o-rama) under the Apache License 2.0. This fork removes the LangChain4j integration in favor of native OpenAI Responses API, Anthropic Messages API, and xAI integrations built on a provider-neutral `ChatProvider` protocol. Messages, tool definitions, and schemas are plain Clojure data. See the `com.rpl.agent-o-rama.model*`, `com.rpl.agent-o-rama.schema`, and `com.rpl.agent-o-rama.tools` namespaces. The Java examples have been removed; the Clojure API is the primary interface.
 
 
 Agent-o-rama is an end-to-end LLM agent platform for building, tracing, testing, and monitoring agents with integrated storage and one-click deployment. Agent-o-rama provides two first-class APIs, one for Java and one for Clojure, with feature parity between them.
@@ -65,7 +65,7 @@ Development of Agent-o-rama applications is done with "in-process cluster" (IPC)
 
 ## Downloads
 
-Download Agent-o-rama releases [here](https://github.com/redplanetlabs/agent-o-rama/releases). A release is used to run the Agent-o-rama frontend. See [this section](https://github.com/redplanetlabs/agent-o-rama/wiki/Quickstart#running-on-a-local-rama-cluster) for instructions on deploying. For building agent modules, add these repositories to the Maven dependencies for your project:
+Releases of this fork are published to Clojars as `com.heavycomputation/agent-o-rama`. The Red Planet Labs repository is also required for the Rama dependencies:
 
 ```
 <repositories>
@@ -80,15 +80,25 @@ Download Agent-o-rama releases [here](https://github.com/redplanetlabs/agent-o-r
 </repositories>
 ```
 
-The Maven target for Agent-o-rama is:
+With Leiningen:
+
+```clojure
+[com.heavycomputation/agent-o-rama "0.1.0"]
+```
+
+With Maven:
 
 ```
 <dependency>
-  <groupId>com.rpl</groupId>
+  <groupId>com.heavycomputation</groupId>
   <artifactId>agent-o-rama</artifactId>
-  <version>0.7.0</version>
+  <version>0.1.0</version>
 </dependency>
 ```
+
+The public namespaces and Java packages retain their original `com.rpl` names for API compatibility. Avoid bringing both this fork and the upstream `com.rpl/agent-o-rama` artifact into the same dependency graph.
+
+The upstream documentation remains useful for the unchanged orchestration APIs. Provider integration behavior specific to this fork is documented in the source namespaces and examples in this repository.
 
 ## Learning Agent-o-rama
 

@@ -1,3 +1,4 @@
+<!-- Modified by Heavy Computation in 2026 as part of its Agent-o-rama fork. -->
 # Agent-o-rama Glossary
 
 This glossary defines terms that have project-specific meanings in the

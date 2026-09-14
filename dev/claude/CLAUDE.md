@@ -1,3 +1,4 @@
+<!-- Modified by Heavy Computation in 2026 as part of its Agent-o-rama fork. -->
 # CLAUDE.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.

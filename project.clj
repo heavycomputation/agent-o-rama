@@ -1,6 +1,13 @@
+;; Modified by Heavy Computation in 2026 as part of its Agent-o-rama fork.
 (def VERSION (.trim (slurp "VERSION")))
 
-(defproject com.rpl/agent-o-rama VERSION
+(defproject com.heavycomputation/agent-o-rama VERSION
+  :description "Heavy Computation's Agent-o-rama fork with native LLM provider integrations"
+  :url "https://github.com/heavycomputation/agent-o-rama"
+  :license {:name "Apache-2.0"
+            :url  "https://www.apache.org/licenses/LICENSE-2.0.txt"}
+  :scm {:name "git"
+        :url  "https://github.com/heavycomputation/agent-o-rama"}
   :source-paths ["src/clj" "src/cljs" "resource"]
   :java-source-paths ["src/java"]
   :aot [com.rpl.agent-o-rama.impl.ui.launch]
@@ -44,8 +51,10 @@
                  [com.cognitect/transit-clj "1.0.333" :exclusions [org.clojure/clojure]]
                  [com.cognitect/transit-cljs "0.8.280" :exclusions [org.clojure/clojure]]]
   :test-selectors
-  {:default (complement #(re-find #"^com\.rpl\.agent\-o\-rama\.ui" (str (:ns %))))
+  {:default #(not (or (re-find #"^com\.rpl\.agent\-o\-rama\.ui" (str (:ns %)))
+                      (re-find #"\-live\-test$" (str (:ns %)))))
    :ui      #(re-find #"^com\.rpl\.agent\-o\-rama\.ui" (str (:ns %)))
+   :live    #(re-find #"\-live\-test$" (str (:ns %)))
    :all     (constantly true)}
   :global-vars {*warn-on-reflection* true}
   :repositories

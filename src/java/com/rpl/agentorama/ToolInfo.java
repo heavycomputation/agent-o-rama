@@ -1,3 +1,4 @@
+// Modified by Heavy Computation in 2026 as part of its Agent-o-rama fork.
 package com.rpl.agentorama;
 
 import java.util.Map;

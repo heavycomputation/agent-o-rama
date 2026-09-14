@@ -1,3 +1,4 @@
+;; Modified by Heavy Computation in 2026 as part of its Agent-o-rama fork.
 (ns com.rpl.agent.basic.human-input-agent
   "Demonstrates human input requests and handling within agent nodes.
 

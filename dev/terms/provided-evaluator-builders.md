@@ -1,3 +1,4 @@
+<!-- Modified by Heavy Computation in 2026 as part of its Agent-o-rama fork. -->
 # Provided Evaluator Builders
 
 Built-in evaluator builder functions available in agent-o-rama for common evaluation tasks, providing ready-to-use assessment capabilities for agent performance measurement.

@@ -1,3 +1,4 @@
+;; Modified by Heavy Computation in 2026 as part of its Agent-o-rama fork.
 (ns com.rpl.agent.chatbot
   "An agent to perform one turn in a chatbot.
   Provides per-thread summarisation and memory."

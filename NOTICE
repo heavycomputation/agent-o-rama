@@ -1,0 +1,13 @@
+Heavy Computation Agent-o-rama fork
+Copyright 2026 Heavy Computation
+
+This product includes software developed by Red Planet Labs and contributors:
+https://github.com/redplanetlabs/agent-o-rama
+
+Heavy Computation has modified the original work, including replacing the
+LangChain4j integration with native provider integrations and related API,
+documentation, examples, and tests. This fork is independently maintained and
+is not an official Red Planet Labs release.
+
+The original work and this fork are distributed under the Apache License 2.0.
+See the LICENSE file for the complete terms.

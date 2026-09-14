@@ -1,3 +1,4 @@
+;; Modified by Heavy Computation in 2026 as part of its Agent-o-rama fork.
 (ns com.rpl.agent-o-rama.ui.components.conversation-test
   (:require
    [cljs.test :refer [deftest is testing]]

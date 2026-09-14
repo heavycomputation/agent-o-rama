@@ -1,3 +1,4 @@
+;; Modified by Heavy Computation in 2026 as part of its Agent-o-rama fork.
 (ns com.rpl.agent.todo
   "An agent to manage TODO items.
   Uses long term memory for accumulating a profile and the TODO items."

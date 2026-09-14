@@ -1,3 +1,4 @@
+;; Modified by Heavy Computation in 2026 as part of its Agent-o-rama fork.
 (ns com.rpl.agent.react
   "This defines a custom reasoning and action agent graph.
   It invokes tools in a simple loop."

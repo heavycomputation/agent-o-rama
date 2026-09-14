@@ -1,3 +1,4 @@
+;; Modified by Heavy Computation in 2026 as part of its Agent-o-rama fork.
 (ns dev.metrics-setup
   "REPL-friendly metrics data generation for UI development.
   

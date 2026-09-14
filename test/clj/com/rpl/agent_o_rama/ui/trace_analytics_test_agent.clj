@@ -1,3 +1,4 @@
+;; Modified by Heavy Computation in 2026 as part of its Agent-o-rama fork.
 (ns com.rpl.agent-o-rama.ui.trace-analytics-test-agent
   "Test agent module for trace analytics E2E tests.
 
