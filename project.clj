@@ -57,6 +57,9 @@
    :live    #(re-find #"\-live\-test$" (str (:ns %)))
    :all     (constantly true)}
   :global-vars {*warn-on-reflection* true}
+  :deploy-repositories
+  [["clojars" {:url "https://repo.clojars.org"
+                :sign-releases false}]]
   :repositories
   [["releases"
     {:id  "maven-releases"
