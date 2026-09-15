@@ -1,3 +1,4 @@
+// Modified by Heavy Computation in 2026 as part of its Agent-o-rama fork.
 package com.rpl.agentorama.impl;
 
 import java.io.IOException;
@@ -108,6 +109,9 @@ public class AgentDeclaredObjectsTaskGlobal implements TaskGlobalObject {
   }
 
   public AgentClient getAgentClient(String localName) {
+    // Initialize the dependency before the client map: Rama's managed resources
+    // share a computeIfAbsent cache, where nested initialization can collide.
+    _thisManager.getResource();
     AgentClient ret = _agents.getResource().get(localName);
     if(ret==null) throw new RuntimeException("Tried to fetch non-existent agent: " + localName);
     return ret;

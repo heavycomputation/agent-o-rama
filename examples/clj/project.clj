@@ -1,6 +1,6 @@
 ;; Modified by Heavy Computation in 2026 as part of its Agent-o-rama fork.
 (defproject com.heavycomputation/agent-o-rama-examples "1.0.0-SNAPSHOT"
-  :dependencies [[com.heavycomputation/agent-o-rama "0.1.0"]]
+  :dependencies [[com.heavycomputation/agent-o-rama "0.1.1"]]
   :jvm-opts ["-Xss6m"
              "-Xms6g"
              "-Xmx6g"

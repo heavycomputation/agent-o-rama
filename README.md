@@ -83,7 +83,7 @@ Releases of this fork are published to Clojars as `com.heavycomputation/agent-o-
 With Leiningen:
 
 ```clojure
-[com.heavycomputation/agent-o-rama "0.1.0"]
+[com.heavycomputation/agent-o-rama "0.1.1"]
 ```
 
 With Maven:
@@ -92,7 +92,7 @@ With Maven:
 <dependency>
   <groupId>com.heavycomputation</groupId>
   <artifactId>agent-o-rama</artifactId>
-  <version>0.1.0</version>
+  <version>0.1.1</version>
 </dependency>
 ```
 
